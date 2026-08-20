@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Cross-Client Inventory**: Added a read-only inventory of skills, MCP servers, and hooks discovered from Claude, Codex, and Cursor user and registered-project locations. The inventory shows provenance, disabled state, symlink targets, and source warnings without displaying MCP commands, headers, environment values, or hook contents. (#2)
+
 ## [3.9.0] - 2026-05-04
 
 ### Added

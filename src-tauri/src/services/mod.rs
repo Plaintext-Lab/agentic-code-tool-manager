@@ -14,6 +14,7 @@ pub mod gist_sync;
 pub mod github_client;
 pub mod hook_writer;
 pub mod insights;
+pub mod inventory;
 pub mod keybindings_writer;
 pub mod managed_settings;
 pub mod mcp_client;

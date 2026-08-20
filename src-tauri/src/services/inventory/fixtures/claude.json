@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "shared-server": {
+      "command": "npx",
+      "args": ["-y", "example-server"],
+      "env": {
+        "API_KEY": "CLAUDE_SECRET_VALUE"
+      }
+    }
+  },
+  "projects": {
+    "/fixture/project": {
+      "mcpServers": {
+        "local-server": {
+          "url": "https://example.invalid/mcp?token=CLAUDE_URL_SECRET",
+          "headers": {
+            "Authorization": "Bearer CLAUDE_HEADER_SECRET"
+          }
+        }
+      },
+      "disabledMcpServers": ["local-server"]
+    }
+  }
+}

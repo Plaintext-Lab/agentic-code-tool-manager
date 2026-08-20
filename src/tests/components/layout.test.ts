@@ -161,6 +161,11 @@ describe('Sidebar Component', () => {
 		expect(screen.getByText('Tool Manager')).toBeInTheDocument();
 	});
 
+	it('should link to the cross-client inventory', () => {
+		render(Sidebar);
+		expect(screen.getByRole('link', { name: 'Inventory' })).toHaveAttribute('href', '/inventory');
+	});
+
 	it('should render navigation groups', () => {
 		render(Sidebar);
 		expect(screen.getByText('Core')).toBeInTheDocument();

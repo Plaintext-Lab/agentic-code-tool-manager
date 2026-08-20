@@ -11,6 +11,7 @@ pub mod debug;
 pub mod docker_hosts;
 pub mod hooks;
 pub mod insights;
+pub mod inventory;
 pub mod keybindings;
 pub mod managed_settings;
 pub mod mcp;
