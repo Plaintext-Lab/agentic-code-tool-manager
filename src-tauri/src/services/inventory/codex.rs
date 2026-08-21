@@ -16,7 +16,7 @@ impl ClientAdapter for CodexAdapter {
     }
 
     fn discover(&self, context: &DiscoveryContext, snapshot: &mut InventorySnapshot) {
-        let global_config_path = context.home_dir.join(".codex/config.toml");
+        let global_config_path = context.codex_home.join("config.toml");
         let global_config = read_toml(&global_config_path, ClientKind::Codex, snapshot);
         let disabled_skills = codex_disabled_skill_paths(global_config.as_ref());
         self.discover_skills(context, &disabled_skills, snapshot);
@@ -31,6 +31,7 @@ impl ClientAdapter for CodexAdapter {
                 SourceKind::UserConfig,
                 None,
                 100,
+                TrustState::NotApplicable,
                 snapshot,
             );
             push_toml_hooks(
@@ -41,17 +42,18 @@ impl ClientAdapter for CodexAdapter {
                 SourceKind::UserConfig,
                 None,
                 100,
-                TrustState::Unknown,
+                TrustState::NotApplicable,
                 snapshot,
             );
         }
         self.discover_hooks_file(
-            &context.home_dir.join(".codex/hooks.json"),
+            &context.codex_home.join("hooks.json"),
             InventoryScope::User,
             SourceKind::UserConfig,
             None,
             100,
             global_hooks_enabled,
+            TrustState::NotApplicable,
             snapshot,
         );
         self.discover_project_configs(context, global_hooks_enabled, snapshot);
@@ -77,7 +79,7 @@ impl CodexAdapter {
             snapshot,
         );
         scan_skill_root(
-            &context.home_dir.join(".codex/skills"),
+            &context.codex_home.join("skills"),
             ClientKind::Codex,
             InventoryScope::Legacy,
             SourceKind::LegacySkills,
@@ -147,6 +149,7 @@ impl CodexAdapter {
                     SourceKind::ProjectConfig,
                     Some(project_root),
                     200,
+                    TrustState::Unknown,
                     snapshot,
                 );
                 push_toml_hooks(
@@ -168,6 +171,7 @@ impl CodexAdapter {
                 Some(project_root),
                 200,
                 project_hooks_enabled,
+                TrustState::Unknown,
                 snapshot,
             );
         }
@@ -182,6 +186,7 @@ impl CodexAdapter {
         project_path: Option<&Path>,
         source_priority: u16,
         enabled: bool,
+        trust_state: TrustState,
         snapshot: &mut InventorySnapshot,
     ) {
         let Some(config) = read_json(hooks_path, ClientKind::Codex, snapshot) else {
@@ -196,7 +201,7 @@ impl CodexAdapter {
             project_path,
             source_priority,
             enabled,
-            TrustState::Unknown,
+            trust_state,
             snapshot,
         );
     }

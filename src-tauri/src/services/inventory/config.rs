@@ -1,6 +1,6 @@
 use super::models::{
-    ClientKind, InventoryItemType, InventoryRecord, InventoryScope, InventorySnapshot,
-    InventoryWarning, SourceKind,
+    effective_state, ClientKind, InventoryItemType, InventoryRecord, InventoryScope,
+    InventorySnapshot, InventoryWarning, SourceKind, TrustState,
 };
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -95,6 +95,7 @@ pub fn push_json_mcps(
     project_path: Option<&Path>,
     source_priority: u16,
     disabled_names: &HashSet<String>,
+    trust_state: TrustState,
     snapshot: &mut InventorySnapshot,
 ) {
     for (ordinal, (name, value)) in servers.iter().enumerate() {
@@ -130,13 +131,14 @@ pub fn push_json_mcps(
             scope,
             source_kind,
             config_path.display().to_string(),
+            project_path,
             ordinal,
             source_priority,
         );
         apply_path_metadata(&mut record, config_path);
-        record.project_path = project_path.map(|path| path.display().to_string());
         record.enabled = Some(enabled);
-        record.is_effective = Some(enabled);
+        record.trust_state = trust_state;
+        record.is_effective = effective_state(enabled, trust_state);
         record.protected_fields = json_protected_fields(config);
         record.detail = Some(detail.to_string());
         snapshot.records.push(record);
@@ -152,6 +154,7 @@ pub fn push_toml_mcps(
     source_kind: SourceKind,
     project_path: Option<&Path>,
     source_priority: u16,
+    trust_state: TrustState,
     snapshot: &mut InventorySnapshot,
 ) {
     let Some(servers) = config.get("mcp_servers").and_then(toml::Value::as_table) else {
@@ -184,13 +187,14 @@ pub fn push_toml_mcps(
             scope,
             source_kind,
             config_path.display().to_string(),
+            project_path,
             ordinal,
             source_priority,
         );
         apply_path_metadata(&mut record, config_path);
-        record.project_path = project_path.map(|path| path.display().to_string());
         record.enabled = Some(enabled);
-        record.is_effective = Some(enabled);
+        record.trust_state = trust_state;
+        record.is_effective = effective_state(enabled, trust_state);
         record.protected_fields = toml_protected_fields(server);
         record.detail = Some(detail.to_string());
         snapshot.records.push(record);

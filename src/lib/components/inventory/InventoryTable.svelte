@@ -85,6 +85,10 @@
 							<span class="font-medium {record.enabled === false ? 'text-amber-700 dark:text-amber-400' : ''}">{statusLabel(record)}</span>
 							{#if record.trustState === 'unknown'}
 								<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">Trust not reported</div>
+							{:else if record.trustState === 'trusted'}
+								<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">Project trusted</div>
+							{:else if record.trustState === 'untrusted'}
+								<div class="mt-1 text-xs text-amber-700 dark:text-amber-400">Project not trusted</div>
 							{/if}
 							{#if record.protectedFields.length > 0}
 								<div class="mt-2 flex items-start gap-1.5 text-xs text-emerald-700 dark:text-emerald-400" title={record.protectedFields.join(', ')}>

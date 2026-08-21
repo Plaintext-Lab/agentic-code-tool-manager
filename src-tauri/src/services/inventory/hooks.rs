@@ -1,7 +1,7 @@
 use super::config::apply_path_metadata;
 use super::models::{
-    ClientKind, InventoryItemType, InventoryRecord, InventoryScope, InventorySnapshot,
-    InventoryWarning, SourceKind, TrustState,
+    effective_state, ClientKind, InventoryItemType, InventoryRecord, InventoryScope,
+    InventorySnapshot, InventoryWarning, SourceKind, TrustState,
 };
 use serde_json::{Map, Value};
 use std::path::Path;
@@ -102,14 +102,14 @@ fn push_hook_record(
         scope,
         source_kind,
         config_path.display().to_string(),
+        project_path,
         ordinal,
         source_priority,
     );
     apply_path_metadata(&mut record, config_path);
-    record.project_path = project_path.map(|path| path.display().to_string());
     record.enabled = Some(enabled);
-    record.is_effective = Some(enabled);
     record.trust_state = trust_state;
+    record.is_effective = effective_state(enabled, trust_state);
     record.detail = Some(format!("{handler_type} handler"));
     snapshot.records.push(record);
 }

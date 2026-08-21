@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use tauri::State;
 
 #[tauri::command]
-pub fn get_tool_inventory(
+pub async fn get_tool_inventory(
     db: State<'_, Arc<Mutex<Database>>>,
 ) -> Result<InventorySnapshot, String> {
     let project_roots = {
@@ -21,5 +21,7 @@ pub fn get_tool_inventory(
     };
     let home_dir =
         dirs::home_dir().ok_or_else(|| "Could not locate the home folder.".to_string())?;
-    Ok(discover_inventory(home_dir, project_roots))
+    tokio::task::spawn_blocking(move || discover_inventory(home_dir, project_roots))
+        .await
+        .map_err(|_| "The inventory scan could not be completed.".to_string())
 }

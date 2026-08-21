@@ -1,5 +1,5 @@
-use super::discover_inventory;
-use super::models::{ClientKind, InventoryItemType};
+use super::models::{ClientKind, InventoryItemType, SourceKind};
+use super::{codex_home_path, discover_inventory, discover_inventory_with_codex_home};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -141,6 +141,137 @@ fn disabled_codex_skill_is_reported_without_deleting_it() {
         .expect("disabled skill should remain visible");
     assert_eq!(skill.enabled, Some(false));
     assert!(skill_path.exists());
+}
+
+#[test]
+fn preserves_same_named_claude_servers_from_multiple_projects() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    write(
+        &home.join(".claude.json"),
+        r#"{
+            "mcpServers": {"shared": {"command": "user-server"}},
+            "projects": {
+                "/projects/one": {"mcpServers": {"shared": {"command": "one-server"}}},
+                "/projects/two": {"mcpServers": {"shared": {"command": "two-server"}}}
+            }
+        }"#,
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+    let records: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| record.client == ClientKind::Claude && record.name == "shared")
+        .collect();
+    let unique_ids: std::collections::HashSet<_> =
+        records.iter().map(|record| &record.id).collect();
+
+    assert_eq!(records.len(), 3);
+    assert_eq!(unique_ids.len(), 3);
+}
+
+#[test]
+fn applies_claude_project_disable_and_trust_state() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let project = fixture.path().join("project");
+    write(
+        &home.join(".claude.json"),
+        &format!(
+            r#"{{
+                "projects": {{
+                    "{}": {{
+                        "disabledMcpjsonServers": ["shared"],
+                        "hasTrustDialogAccepted": false
+                    }}
+                }}
+            }}"#,
+            project.display()
+        ),
+    );
+    write(
+        &project.join(".mcp.json"),
+        r#"{"mcpServers": {"shared": {"command": "project-server"}}}"#,
+    );
+
+    let snapshot = discover_inventory(home, vec![project]);
+    let record = snapshot
+        .records
+        .iter()
+        .find(|record| {
+            record.client == ClientKind::Claude
+                && record.name == "shared"
+                && record.source_kind == SourceKind::ProjectConfig
+        })
+        .expect("project MCP should be discovered");
+
+    assert_eq!(record.enabled, Some(false));
+    assert_eq!(record.is_effective, Some(false));
+    assert!(serde_json::to_string(record)
+        .unwrap()
+        .contains(r#""trustState":"untrusted""#));
+}
+
+#[test]
+fn uses_codex_home_environment_override() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = fixture.path().join("custom-codex-home");
+    write(
+        &codex_home.join("config.toml"),
+        "[mcp_servers.custom-home]\ncommand = 'custom-server'\n",
+    );
+    let resolved_codex_home = codex_home_path(&home, Some(codex_home.clone().into_os_string()));
+    let snapshot = discover_inventory_with_codex_home(home, resolved_codex_home, Vec::new());
+
+    assert!(snapshot.records.iter().any(|record| {
+        record.client == ClientKind::Codex
+            && record.name == "custom-home"
+            && record.source_path == codex_home.join("config.toml").display().to_string()
+    }));
+}
+
+#[test]
+fn reports_context_dependent_codex_mcp_precedence() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let project = fixture.path().join("project");
+    write(
+        &home.join(".codex/config.toml"),
+        "[mcp_servers.shared]\ncommand = 'user-server'\n",
+    );
+    write(
+        &project.join(".codex/config.toml"),
+        "[mcp_servers.shared]\ncommand = 'project-server'\n",
+    );
+
+    let snapshot = discover_inventory(home, vec![project]);
+    let records: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| record.client == ClientKind::Codex && record.name == "shared")
+        .collect();
+
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|record| record.is_effective.is_none()));
+    assert!(records.iter().any(|record| record.source_priority == 100));
+    assert!(records.iter().any(|record| record.source_priority == 200));
+}
+
+#[test]
+fn warns_when_a_registered_project_cannot_be_scanned() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let missing_project = fixture.path().join("missing-project");
+
+    let snapshot = discover_inventory(home, vec![missing_project.clone()]);
+
+    assert_eq!(snapshot.scanned_project_count, 0);
+    assert!(snapshot.warnings.iter().any(|warning| {
+        warning.source_path == missing_project.display().to_string()
+            && warning.message.contains("registered project")
+    }));
 }
 
 #[cfg(unix)]

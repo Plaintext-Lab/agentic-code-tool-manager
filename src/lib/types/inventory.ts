@@ -9,7 +9,7 @@ export type InventorySourceKind =
 	| 'projectSkills'
 	| 'adminSkills'
 	| 'legacySkills';
-export type InventoryTrustState = 'notApplicable' | 'unknown';
+export type InventoryTrustState = 'notApplicable' | 'unknown' | 'trusted' | 'untrusted';
 
 export interface AdapterCapabilities {
 	client: InventoryClient;
@@ -39,7 +39,7 @@ export interface InventoryRecord {
 }
 
 export interface InventoryWarning {
-	client: InventoryClient;
+	client: InventoryClient | null;
 	sourcePath: string;
 	message: string;
 }

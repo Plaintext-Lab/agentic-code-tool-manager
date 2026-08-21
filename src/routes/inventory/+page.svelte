@@ -49,7 +49,7 @@
 	onMount(loadInventory);
 </script>
 
-<Header title="Inventory" subtitle="Claude, Codex, and Cursor tools found on this Mac">
+<Header title="Inventory" subtitle="Claude, Codex, and Cursor tools found on this computer">
 	<button class="btn btn-ghost" onclick={loadInventory} disabled={loading} aria-label="Scan inventory again">
 		<RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
 		Scan again
@@ -91,7 +91,7 @@
 					</summary>
 					<ul class="mt-3 space-y-2 text-amber-800 dark:text-amber-300">
 						{#each snapshot.warnings as warning}
-							<li><span class="font-medium capitalize">{warning.client}:</span> {warning.message}<code class="mt-0.5 block break-all text-xs">{warning.sourcePath}</code></li>
+							<li><span class="font-medium capitalize">{warning.client ?? 'Inventory'}:</span> {warning.message}<code class="mt-0.5 block break-all text-xs">{warning.sourcePath}</code></li>
 						{/each}
 					</ul>
 				</details>

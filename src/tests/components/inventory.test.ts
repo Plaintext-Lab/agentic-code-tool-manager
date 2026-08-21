@@ -45,6 +45,16 @@ describe('InventoryTable', () => {
 		expect(screen.getByText('Trust not reported')).toBeInTheDocument();
 	});
 
+	it('shows when a project has not been trusted', () => {
+		render(InventoryTable, {
+			props: {
+				records: [{ ...baseRecord, id: 'claude:mcp:untrusted', client: 'claude', trustState: 'untrusted', isEffective: false }]
+			}
+		});
+
+		expect(screen.getByText('Project not trusted')).toBeInTheDocument();
+	});
+
 	it('keeps same-named tools from separate sources visible', () => {
 		render(InventoryTable, {
 			props: {

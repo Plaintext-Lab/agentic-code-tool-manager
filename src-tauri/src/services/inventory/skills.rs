@@ -135,10 +135,10 @@ pub fn scan_skill_root(
             scope,
             source_kind,
             original_path.clone(),
+            project_path,
             ordinal,
             source_priority,
         );
-        record.project_path = project_path.map(|path| path.display().to_string());
         record.original_path = original_path.clone();
         record.resolved_path = Some(resolved_path.clone());
         record.is_symlink = original_path != resolved_path;

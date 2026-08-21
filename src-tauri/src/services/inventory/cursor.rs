@@ -142,6 +142,7 @@ impl CursorAdapter {
             project_path,
             source_priority,
             &HashSet::new(),
+            trust_state_for_scope(scope),
             snapshot,
         );
     }
@@ -172,5 +173,14 @@ impl CursorAdapter {
             trust_state,
             snapshot,
         );
+    }
+}
+
+fn trust_state_for_scope(scope: InventoryScope) -> TrustState {
+    match scope {
+        InventoryScope::Project => TrustState::Unknown,
+        InventoryScope::User | InventoryScope::Admin | InventoryScope::Legacy => {
+            TrustState::NotApplicable
+        }
     }
 }

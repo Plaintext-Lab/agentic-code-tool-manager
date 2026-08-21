@@ -47,6 +47,17 @@ pub enum InventoryScope {
     Legacy,
 }
 
+impl InventoryScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Project => "project",
+            Self::Admin => "admin",
+            Self::Legacy => "legacy",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SourceKind {
@@ -64,6 +75,8 @@ pub enum SourceKind {
 pub enum TrustState {
     NotApplicable,
     Unknown,
+    Trusted,
+    Untrusted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -117,14 +130,18 @@ impl InventoryRecord {
         scope: InventoryScope,
         source_kind: SourceKind,
         source_path: String,
+        project_path: Option<&std::path::Path>,
         ordinal: usize,
         source_priority: u16,
     ) -> Self {
+        let project_path = project_path.map(|path| path.display().to_string());
         let id = format!(
-            "{}:{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}:{}",
             client.as_str(),
             item_type.as_str(),
+            scope.as_str(),
             source_path,
+            project_path.as_deref().unwrap_or_default(),
             name,
             ordinal
         );
@@ -137,7 +154,7 @@ impl InventoryRecord {
             source_kind,
             original_path: source_path.clone(),
             source_path,
-            project_path: None,
+            project_path,
             resolved_path: None,
             is_symlink: false,
             enabled: None,
@@ -153,7 +170,7 @@ impl InventoryRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryWarning {
-    pub client: ClientKind,
+    pub client: Option<ClientKind>,
     pub source_path: String,
     pub message: String,
 }
@@ -165,7 +182,15 @@ impl InventoryWarning {
         message: impl Into<String>,
     ) -> Self {
         Self {
-            client,
+            client: Some(client),
+            source_path: source_path.into(),
+            message: message.into(),
+        }
+    }
+
+    pub fn general(source_path: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            client: None,
             source_path: source_path.into(),
             message: message.into(),
         }
@@ -192,6 +217,24 @@ impl InventorySnapshot {
     }
 
     pub fn finish(mut self) -> Self {
+        let project_mcp_records: HashSet<_> = self
+            .records
+            .iter()
+            .filter(|record| {
+                record.item_type == InventoryItemType::Mcp && record.project_path.is_some()
+            })
+            .map(|record| (record.client, record.name.clone()))
+            .collect();
+        for record in &mut self.records {
+            if record.item_type == InventoryItemType::Mcp
+                && record.project_path.is_none()
+                && record.enabled != Some(false)
+                && record.trust_state != TrustState::Untrusted
+                && project_mcp_records.contains(&(record.client, record.name.clone()))
+            {
+                record.is_effective = None;
+            }
+        }
         let mut seen = HashSet::new();
         self.records.retain(|record| seen.insert(record.id.clone()));
         self.records.sort_by(|left, right| {
@@ -209,8 +252,14 @@ impl InventorySnapshot {
                 ))
         });
         self.warnings.sort_by(|left, right| {
-            (left.client.as_str(), &left.source_path)
-                .cmp(&(right.client.as_str(), &right.source_path))
+            (
+                left.client.map(ClientKind::as_str).unwrap_or_default(),
+                &left.source_path,
+            )
+                .cmp(&(
+                    right.client.map(ClientKind::as_str).unwrap_or_default(),
+                    &right.source_path,
+                ))
         });
         self
     }
@@ -219,5 +268,17 @@ impl InventorySnapshot {
 #[derive(Debug, Clone)]
 pub struct DiscoveryContext {
     pub home_dir: PathBuf,
+    pub codex_home: PathBuf,
     pub project_roots: Vec<PathBuf>,
+}
+
+pub fn effective_state(enabled: bool, trust_state: TrustState) -> Option<bool> {
+    if !enabled || trust_state == TrustState::Untrusted {
+        return Some(false);
+    }
+    match trust_state {
+        TrustState::Unknown => None,
+        TrustState::NotApplicable | TrustState::Trusted => Some(true),
+        TrustState::Untrusted => Some(false),
+    }
 }
