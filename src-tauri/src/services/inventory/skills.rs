@@ -219,10 +219,19 @@ fn should_descend(entry: &DirEntry) -> bool {
     if entry.depth() == 0 || !entry.file_type().is_dir() {
         return true;
     }
-    !matches!(
-        entry.file_name().to_string_lossy().as_ref(),
-        ".git" | "node_modules" | "target" | "dist" | "build" | ".venv" | "vendor"
-    )
+    let directory_name = entry.file_name().to_string_lossy();
+    if matches!(directory_name.as_ref(), ".git" | "node_modules" | ".venv") {
+        return false;
+    }
+    let is_support_directory = entry
+        .path()
+        .parent()
+        .is_some_and(|parent| parent.join("SKILL.md").is_file());
+    !is_support_directory
+        || !matches!(
+            directory_name.as_ref(),
+            "target" | "dist" | "build" | "vendor"
+        )
 }
 
 fn push_skill_warning(

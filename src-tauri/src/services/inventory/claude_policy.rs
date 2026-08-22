@@ -63,6 +63,7 @@ impl McpPolicyMatcher {
 #[derive(Debug, Default)]
 pub(super) struct ClaudeManagedPolicy {
     pub(super) allow_managed_hooks_only: bool,
+    pub(super) managed_hooks_enabled: Option<bool>,
     allowed_mcps: Option<Vec<McpPolicyMatcher>>,
     denied_mcps: Vec<McpPolicyMatcher>,
     pub(super) managed_mcp_exclusive: bool,
@@ -75,6 +76,10 @@ impl ClaudeManagedPolicy {
                 .and_then(|settings| settings.get("allowManagedHooksOnly"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            managed_hooks_enabled: settings
+                .and_then(|settings| settings.get("disableAllHooks"))
+                .and_then(Value::as_bool)
+                .map(|disabled| !disabled),
             allowed_mcps: policy_matchers(settings, "allowedMcpServers"),
             denied_mcps: policy_matchers(settings, "deniedMcpServers").unwrap_or_default(),
             managed_mcp_exclusive,

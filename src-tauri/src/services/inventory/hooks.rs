@@ -38,9 +38,17 @@ pub fn push_json_hooks(
             };
             if let Some(handlers) = group_object.get("hooks").and_then(Value::as_array) {
                 for handler in handlers {
+                    let Some(handler) = handler.as_object() else {
+                        snapshot.warnings.push(InventoryWarning::new(
+                            client,
+                            config_path.display().to_string(),
+                            "Skipped a hook handler because its definition is not an object.",
+                        ));
+                        continue;
+                    };
                     push_hook_record(
                         event,
-                        handler.as_object(),
+                        handler,
                         config_path,
                         client,
                         scope,
@@ -57,7 +65,7 @@ pub fn push_json_hooks(
             } else {
                 push_hook_record(
                     event,
-                    Some(group_object),
+                    group_object,
                     config_path,
                     client,
                     scope,
@@ -78,7 +86,7 @@ pub fn push_json_hooks(
 #[allow(clippy::too_many_arguments)]
 fn push_hook_record(
     event: &str,
-    handler: Option<&Map<String, Value>>,
+    handler: &Map<String, Value>,
     config_path: &Path,
     client: ClientKind,
     scope: InventoryScope,
@@ -91,7 +99,7 @@ fn push_hook_record(
     snapshot: &mut InventorySnapshot,
 ) {
     let handler_type = handler
-        .and_then(|value| value.get("type"))
+        .get("type")
         .and_then(Value::as_str)
         .filter(|value| matches!(*value, "command" | "prompt" | "agent" | "http" | "mcp_tool"))
         .unwrap_or("command");

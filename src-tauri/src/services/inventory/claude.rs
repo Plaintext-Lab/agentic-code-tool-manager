@@ -124,8 +124,11 @@ impl ClaudeAdapter {
 
         let settings_path = context.home_dir.join(".claude/settings.json");
         let settings = read_json(&settings_path, ClientKind::Claude, snapshot);
-        let hooks_enabled =
-            hook_setting(settings.as_ref()).unwrap_or(true) && !policy.allow_managed_hooks_only;
+        let hooks_enabled = policy
+            .managed_hooks_enabled
+            .or_else(|| hook_setting(settings.as_ref()))
+            .unwrap_or(true)
+            && !policy.allow_managed_hooks_only;
         if let Some(settings) = settings.as_ref() {
             push_json_hooks(
                 settings,
@@ -243,7 +246,9 @@ impl ClaudeAdapter {
             let local_settings_path = project_root.join(".claude/settings.local.json");
             let settings = read_json(&settings_path, ClientKind::Claude, snapshot);
             let local_settings = read_json(&local_settings_path, ClientKind::Claude, snapshot);
-            let hooks_enabled = hook_setting(local_settings.as_ref())
+            let hooks_enabled = policy
+                .managed_hooks_enabled
+                .or_else(|| hook_setting(local_settings.as_ref()))
                 .or_else(|| hook_setting(settings.as_ref()))
                 .unwrap_or(user_hooks_enabled)
                 && !policy.allow_managed_hooks_only;

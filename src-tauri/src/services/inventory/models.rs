@@ -260,19 +260,19 @@ fn reconcile_contextual_effectiveness(
         .map(|record| (record.client, record.name.clone()))
         .collect();
     for (client, name) in groups {
-        let enabled_indices: Vec<_> = records
+        let applicable_indices: Vec<_> = records
             .iter()
             .enumerate()
             .filter(|(_, record)| {
                 record.client == client
                     && record.item_type == item_type
                     && record.name == name
-                    && record.enabled == Some(true)
-                    && record.is_effective != Some(false)
+                    && record.enabled.is_some()
+                    && (record.enabled == Some(false) || record.is_effective != Some(false))
             })
             .map(|(index, _)| index)
             .collect();
-        let global_indices: Vec<_> = enabled_indices
+        let global_indices: Vec<_> = applicable_indices
             .iter()
             .copied()
             .filter(|index| records[*index].project_path.is_none())
@@ -280,13 +280,13 @@ fn reconcile_contextual_effectiveness(
         let mut states = HashMap::new();
         apply_context_states(records, &global_indices, &mut states);
 
-        let project_paths: HashSet<_> = enabled_indices
+        let project_paths: HashSet<_> = applicable_indices
             .iter()
             .filter_map(|index| records[*index].project_path.clone())
             .collect();
         for project_path in project_paths {
             let mut contextual_indices = global_indices.clone();
-            contextual_indices.extend(enabled_indices.iter().copied().filter(|index| {
+            contextual_indices.extend(applicable_indices.iter().copied().filter(|index| {
                 records[*index].project_path.as_deref() == Some(project_path.as_str())
             }));
             let context_states = context_states(records, &contextual_indices);

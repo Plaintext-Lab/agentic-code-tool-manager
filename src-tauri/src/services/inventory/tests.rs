@@ -631,6 +631,122 @@ fn managed_mcp_file_excludes_user_configured_servers() {
     assert_eq!(managed.is_effective, Some(true));
 }
 
+#[test]
+fn disabled_project_mcp_still_shadows_user_definition() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let project = fixture.path().join("project");
+    write(
+        &home.join(".codex/config.toml"),
+        &format!(
+            "[mcp_servers.shared]\ncommand = 'user'\n\n[projects.\"{}\"]\ntrust_level = 'trusted'\n",
+            project.display()
+        ),
+    );
+    write(
+        &project.join(".codex/config.toml"),
+        "[mcp_servers.shared]\ncommand = 'project'\nenabled = false\n",
+    );
+
+    let snapshot = discover_inventory(home, vec![project]);
+    let records: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| record.client == ClientKind::Codex && record.name == "shared")
+        .collect();
+    let user = records
+        .iter()
+        .find(|record| record.scope == super::models::InventoryScope::User)
+        .expect("user MCP should be discovered");
+    let project = records
+        .iter()
+        .find(|record| record.scope == super::models::InventoryScope::Project)
+        .expect("project MCP should be discovered");
+
+    assert_eq!(user.is_effective, None);
+    assert_eq!(project.enabled, Some(false));
+    assert_eq!(project.is_effective, Some(false));
+}
+
+#[test]
+fn managed_disable_all_hooks_applies_to_every_scope() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let managed_settings = fixture.path().join("managed-settings.json");
+    let managed_mcp = fixture.path().join("managed-mcp-missing.json");
+    write(
+        &home.join(".claude/settings.json"),
+        r#"{"disableAllHooks":false,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"user-hook"}]}]}}"#,
+    );
+    write(
+        &managed_settings,
+        r#"{"disableAllHooks":true,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"managed-hook"}]}]}}"#,
+    );
+
+    let snapshot = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings,
+        managed_mcp,
+        Vec::new(),
+    );
+    let hooks: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| {
+            record.client == ClientKind::Claude && record.item_type == InventoryItemType::Hook
+        })
+        .collect();
+
+    assert_eq!(hooks.len(), 2);
+    assert!(hooks
+        .iter()
+        .all(|record| record.enabled == Some(false) && record.is_effective == Some(false)));
+}
+
+#[test]
+fn discovers_valid_top_level_skill_with_pruned_directory_name() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    write(
+        &home.join(".agents/skills/build/SKILL.md"),
+        "---\nname: build\ndescription: Build workflow\n---\n",
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+
+    assert!(snapshot.records.iter().any(|record| {
+        record.client == ClientKind::Codex
+            && record.item_type == InventoryItemType::Skill
+            && record.name == "build"
+    }));
+}
+
+#[test]
+fn malformed_hook_handlers_are_skipped_with_a_warning() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    write(
+        &home.join(".claude/settings.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[null,"bad",{"type":"command","command":"valid"}]}]}}"#,
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+    let hooks: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| {
+            record.client == ClientKind::Claude && record.item_type == InventoryItemType::Hook
+        })
+        .collect();
+
+    assert_eq!(hooks.len(), 1);
+    assert!(snapshot
+        .warnings
+        .iter()
+        .any(|warning| warning.message.contains("hook handler")));
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_skills_resolve_and_cycles_become_warnings() {
