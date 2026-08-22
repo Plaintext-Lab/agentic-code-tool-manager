@@ -39,7 +39,10 @@
 
 	function statusLabel(record: InventoryRecord): string {
 		if (record.enabled === null) return 'Status not reported';
-		return record.enabled ? 'Enabled' : 'Disabled';
+		if (!record.enabled) return 'Disabled';
+		if (record.isEffective === false) return 'Not effective';
+		if (record.isEffective === null) return 'Effectiveness depends on context';
+		return 'Enabled';
 	}
 </script>
 
@@ -82,7 +85,7 @@
 							</details>
 						</td>
 						<td class="px-4 py-4">
-							<span class="font-medium {record.enabled === false ? 'text-amber-700 dark:text-amber-400' : ''}">{statusLabel(record)}</span>
+							<span class="font-medium {record.enabled === false || record.isEffective === false ? 'text-amber-700 dark:text-amber-400' : ''}">{statusLabel(record)}</span>
 							{#if record.trustState === 'unknown'}
 								<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">Trust not reported</div>
 							{:else if record.trustState === 'trusted'}

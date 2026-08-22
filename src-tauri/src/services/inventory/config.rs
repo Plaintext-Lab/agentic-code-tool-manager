@@ -95,6 +95,7 @@ pub fn push_json_mcps(
     project_path: Option<&Path>,
     source_priority: u16,
     disabled_names: &HashSet<String>,
+    approved_names: Option<&HashSet<String>>,
     trust_state: TrustState,
     snapshot: &mut InventorySnapshot,
 ) {
@@ -138,7 +139,12 @@ pub fn push_json_mcps(
         apply_path_metadata(&mut record, config_path);
         record.enabled = Some(enabled);
         record.trust_state = trust_state;
-        record.is_effective = effective_state(enabled, trust_state);
+        let approved = approved_names.is_none_or(|names| names.contains(name));
+        record.is_effective = if enabled && !approved {
+            Some(false)
+        } else {
+            effective_state(enabled, trust_state)
+        };
         record.protected_fields = json_protected_fields(config);
         record.detail = Some(detail.to_string());
         snapshot.records.push(record);

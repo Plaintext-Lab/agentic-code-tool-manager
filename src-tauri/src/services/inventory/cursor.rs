@@ -142,6 +142,7 @@ impl CursorAdapter {
             project_path,
             source_priority,
             &HashSet::new(),
+            None,
             trust_state_for_scope(scope),
             snapshot,
         );

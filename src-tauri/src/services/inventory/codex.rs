@@ -42,6 +42,7 @@ impl ClientAdapter for CodexAdapter {
                 SourceKind::UserConfig,
                 None,
                 100,
+                global_hooks_enabled,
                 TrustState::NotApplicable,
                 snapshot,
             );
@@ -56,7 +57,12 @@ impl ClientAdapter for CodexAdapter {
             TrustState::NotApplicable,
             snapshot,
         );
-        self.discover_project_configs(context, global_hooks_enabled, snapshot);
+        self.discover_project_configs(
+            context,
+            global_config.as_ref(),
+            global_hooks_enabled,
+            snapshot,
+        );
     }
 }
 
@@ -133,10 +139,12 @@ impl CodexAdapter {
     fn discover_project_configs(
         &self,
         context: &DiscoveryContext,
+        global_config: Option<&toml::Value>,
         global_hooks_enabled: bool,
         snapshot: &mut InventorySnapshot,
     ) {
         for project_root in &context.project_roots {
+            let trust_state = project_trust_state(global_config, project_root);
             let config_path = project_root.join(".codex/config.toml");
             let config = read_toml(&config_path, ClientKind::Codex, snapshot);
             let project_hooks_enabled = hooks_enabled(config.as_ref(), global_hooks_enabled);
@@ -149,7 +157,7 @@ impl CodexAdapter {
                     SourceKind::ProjectConfig,
                     Some(project_root),
                     200,
-                    TrustState::Unknown,
+                    trust_state,
                     snapshot,
                 );
                 push_toml_hooks(
@@ -160,7 +168,8 @@ impl CodexAdapter {
                     SourceKind::ProjectConfig,
                     Some(project_root),
                     200,
-                    TrustState::Unknown,
+                    project_hooks_enabled,
+                    trust_state,
                     snapshot,
                 );
             }
@@ -171,7 +180,7 @@ impl CodexAdapter {
                 Some(project_root),
                 200,
                 project_hooks_enabled,
-                TrustState::Unknown,
+                trust_state,
                 snapshot,
             );
         }
@@ -218,4 +227,29 @@ fn hooks_enabled(config: Option<&toml::Value>, fallback: bool) -> bool {
         })
         .and_then(toml::Value::as_bool)
         .unwrap_or(fallback)
+}
+
+fn project_trust_state(config: Option<&toml::Value>, project_root: &Path) -> TrustState {
+    let Some(projects) = config
+        .and_then(|value| value.get("projects"))
+        .and_then(toml::Value::as_table)
+    else {
+        return TrustState::Unknown;
+    };
+    let direct_key = project_root.display().to_string();
+    let project = projects.get(&direct_key).or_else(|| {
+        let canonical_root = std::fs::canonicalize(project_root).ok()?;
+        projects.iter().find_map(|(path, project)| {
+            let candidate = std::fs::canonicalize(path).ok()?;
+            (candidate == canonical_root).then_some(project)
+        })
+    });
+    match project
+        .and_then(|value| value.get("trust_level"))
+        .and_then(toml::Value::as_str)
+    {
+        Some("trusted") => TrustState::Trusted,
+        Some("untrusted") => TrustState::Untrusted,
+        _ => TrustState::Unknown,
+    }
 }

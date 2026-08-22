@@ -123,6 +123,7 @@ pub fn push_toml_hooks(
     source_kind: SourceKind,
     project_path: Option<&Path>,
     source_priority: u16,
+    enabled: bool,
     trust_state: TrustState,
     snapshot: &mut InventorySnapshot,
 ) {
@@ -137,12 +138,6 @@ pub fn push_toml_hooks(
         ));
         return;
     };
-    let enabled = config
-        .get("features")
-        .and_then(toml::Value::as_table)
-        .and_then(|features| features.get("hooks"))
-        .and_then(toml::Value::as_bool)
-        .unwrap_or(true);
     let wrapper = serde_json::json!({ "hooks": hooks_json });
     push_json_hooks(
         &wrapper,

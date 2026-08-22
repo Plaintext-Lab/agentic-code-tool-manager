@@ -53,6 +53,7 @@ describe('InventoryTable', () => {
 		});
 
 		expect(screen.getByText('Project not trusted')).toBeInTheDocument();
+		expect(screen.getByText('Not effective')).toBeInTheDocument();
 	});
 
 	it('keeps same-named tools from separate sources visible', () => {

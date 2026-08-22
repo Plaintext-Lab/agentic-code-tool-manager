@@ -1,4 +1,4 @@
-use super::models::{ClientKind, InventoryItemType, SourceKind};
+use super::models::{ClientKind, InventoryItemType, SourceKind, TrustState};
 use super::{codex_home_path, discover_inventory, discover_inventory_with_codex_home};
 use std::fs;
 use std::path::Path;
@@ -272,6 +272,219 @@ fn warns_when_a_registered_project_cannot_be_scanned() {
         warning.source_path == missing_project.display().to_string()
             && warning.message.contains("registered project")
     }));
+}
+
+#[test]
+fn pending_claude_project_mcp_is_not_effective() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let project = fixture.path().join("project");
+    let allow_all_project = fixture.path().join("allow-all-project");
+    write(
+        &home.join(".claude.json"),
+        &format!(
+            r#"{{
+                "projects": {{
+                    "{}": {{
+                        "enabledMcpjsonServers": ["approved"],
+                        "disabledMcpjsonServers": [],
+                        "hasTrustDialogAccepted": true
+                    }},
+                    "{}": {{
+                        "enableAllProjectMcpServers": true,
+                        "hasTrustDialogAccepted": true
+                    }}
+                }}
+            }}"#,
+            project.display(),
+            allow_all_project.display()
+        ),
+    );
+    write(
+        &project.join(".mcp.json"),
+        r#"{
+            "mcpServers": {
+                "approved": {"command": "approved-server"},
+                "pending": {"command": "pending-server"}
+            }
+        }"#,
+    );
+    write(
+        &allow_all_project.join(".mcp.json"),
+        r#"{"mcpServers":{"automatically-approved":{"command":"approved-server"}}}"#,
+    );
+
+    let snapshot = discover_inventory(home, vec![project, allow_all_project]);
+    let approved = snapshot
+        .records
+        .iter()
+        .find(|record| record.client == ClientKind::Claude && record.name == "approved")
+        .expect("approved project MCP should be discovered");
+    let pending = snapshot
+        .records
+        .iter()
+        .find(|record| record.client == ClientKind::Claude && record.name == "pending")
+        .expect("pending project MCP should be discovered");
+    let automatically_approved = snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "automatically-approved")
+        .expect("project MCP should be discovered when all servers are approved");
+
+    assert_eq!(approved.enabled, Some(true));
+    assert_eq!(approved.is_effective, Some(true));
+    assert_eq!(pending.enabled, Some(true));
+    assert_eq!(pending.is_effective, Some(false));
+    assert_eq!(automatically_approved.is_effective, Some(true));
+}
+
+#[test]
+fn claude_hook_disable_uses_highest_precedence_setting() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let inherited_project = fixture.path().join("inherited-project");
+    let local_project = fixture.path().join("local-project");
+    let enabled_project = fixture.path().join("enabled-project");
+    write(
+        &home.join(".claude/settings.json"),
+        r#"{"disableAllHooks": true}"#,
+    );
+    write(
+        &home.join(".claude.json"),
+        &format!(
+            r#"{{"projects":{{"{}":{{"hasTrustDialogAccepted":true}},"{}":{{"hasTrustDialogAccepted":true}},"{}":{{"hasTrustDialogAccepted":true}}}}}}"#,
+            inherited_project.display(),
+            local_project.display(),
+            enabled_project.display()
+        ),
+    );
+    for project in [&inherited_project, &local_project, &enabled_project] {
+        write(
+            &project.join(".claude/settings.json"),
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"shared-hook"}]}]}}"#,
+        );
+    }
+    write(
+        &local_project.join(".claude/settings.json"),
+        r#"{"disableAllHooks":false,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"shared-hook"}]}]}}"#,
+    );
+    write(
+        &local_project.join(".claude/settings.local.json"),
+        r#"{"disableAllHooks":true}"#,
+    );
+    write(
+        &enabled_project.join(".claude/settings.json"),
+        r#"{"disableAllHooks":false,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"shared-hook"}]}]}}"#,
+    );
+
+    let snapshot = discover_inventory(
+        home,
+        vec![
+            inherited_project.clone(),
+            local_project.clone(),
+            enabled_project.clone(),
+        ],
+    );
+    let project_hook = |project: &Path| {
+        let project_path = fs::canonicalize(project).unwrap().display().to_string();
+        snapshot
+            .records
+            .iter()
+            .find(|record| {
+                record.client == ClientKind::Claude
+                    && record.item_type == InventoryItemType::Hook
+                    && record.project_path.as_deref() == Some(project_path.as_str())
+            })
+            .expect("project hook should be discovered")
+    };
+
+    assert_eq!(project_hook(&inherited_project).is_effective, Some(false));
+    assert_eq!(project_hook(&local_project).is_effective, Some(false));
+    assert_eq!(project_hook(&enabled_project).is_effective, Some(true));
+}
+
+#[test]
+fn codex_project_trust_controls_effectiveness() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let trusted_project = fixture.path().join("trusted-project");
+    let untrusted_project = fixture.path().join("untrusted-project");
+    write(
+        &home.join(".codex/config.toml"),
+        &format!(
+            "[projects.'{}']\ntrust_level = 'trusted'\n\n[projects.'{}']\ntrust_level = 'untrusted'\n",
+            trusted_project.display(),
+            untrusted_project.display()
+        ),
+    );
+    write(
+        &trusted_project.join(".codex/config.toml"),
+        "[mcp_servers.trusted-server]\ncommand = 'trusted'\n\n[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = 'command'\ncommand = 'trusted-hook'\n",
+    );
+    write(
+        &untrusted_project.join(".codex/config.toml"),
+        "[mcp_servers.untrusted-server]\ncommand = 'untrusted'\n\n[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = 'command'\ncommand = 'untrusted-hook'\n",
+    );
+
+    let snapshot = discover_inventory(home, vec![trusted_project, untrusted_project]);
+    let trusted = snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "trusted-server")
+        .expect("trusted project MCP should be discovered");
+    let untrusted = snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "untrusted-server")
+        .expect("untrusted project MCP should be discovered");
+
+    assert_eq!(trusted.trust_state, TrustState::Trusted);
+    assert_eq!(trusted.is_effective, Some(true));
+    assert_eq!(untrusted.trust_state, TrustState::Untrusted);
+    assert_eq!(untrusted.is_effective, Some(false));
+    let project_hooks: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| {
+            record.client == ClientKind::Codex && record.item_type == InventoryItemType::Hook
+        })
+        .collect();
+    assert!(project_hooks.iter().any(|record| {
+        record.trust_state == TrustState::Trusted && record.is_effective == Some(true)
+    }));
+    assert!(project_hooks.iter().any(|record| {
+        record.trust_state == TrustState::Untrusted && record.is_effective == Some(false)
+    }));
+}
+
+#[test]
+fn codex_inline_hooks_use_effective_feature_state() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let project = fixture.path().join("project");
+    write(
+        &home.join(".codex/config.toml"),
+        "[features]\ncodex_hooks = false\n\n[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = 'command'\ncommand = 'user-hook'\n",
+    );
+    write(
+        &project.join(".codex/config.toml"),
+        "[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = 'command'\ncommand = 'project-hook'\n",
+    );
+
+    let snapshot = discover_inventory(home, vec![project]);
+    let hooks: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| {
+            record.client == ClientKind::Codex && record.item_type == InventoryItemType::Hook
+        })
+        .collect();
+
+    assert_eq!(hooks.len(), 2);
+    assert!(hooks.iter().all(|record| record.enabled == Some(false)));
+    assert!(hooks
+        .iter()
+        .all(|record| record.is_effective == Some(false)));
 }
 
 #[cfg(unix)]

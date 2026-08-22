@@ -19,8 +19,8 @@ impl ClientAdapter for ClaudeAdapter {
 
     fn discover(&self, context: &DiscoveryContext, snapshot: &mut InventorySnapshot) {
         self.discover_skills(context, snapshot);
-        let user_state = self.discover_user_state(context, snapshot);
-        self.discover_project_configs(context, user_state.as_ref(), snapshot);
+        let (user_state, user_hooks_enabled) = self.discover_user_state(context, snapshot);
+        self.discover_project_configs(context, user_state.as_ref(), user_hooks_enabled, snapshot);
     }
 }
 
@@ -59,7 +59,7 @@ impl ClaudeAdapter {
         &self,
         context: &DiscoveryContext,
         snapshot: &mut InventorySnapshot,
-    ) -> Option<Value> {
+    ) -> (Option<Value>, bool) {
         let claude_json_path = context.home_dir.join(".claude.json");
         let config = read_json(&claude_json_path, ClientKind::Claude, snapshot);
         if let Some(config) = config.as_ref() {
@@ -73,6 +73,7 @@ impl ClaudeAdapter {
                     None,
                     100,
                     &HashSet::new(),
+                    None,
                     TrustState::NotApplicable,
                     snapshot,
                 );
@@ -81,26 +82,23 @@ impl ClaudeAdapter {
         }
 
         let settings_path = context.home_dir.join(".claude/settings.json");
-        if let Some(settings) = read_json(&settings_path, ClientKind::Claude, snapshot) {
-            let enabled = settings
-                .get("disableAllHooks")
-                .and_then(Value::as_bool)
-                .map(|disabled| !disabled)
-                .unwrap_or(true);
+        let settings = read_json(&settings_path, ClientKind::Claude, snapshot);
+        let hooks_enabled = hook_setting(settings.as_ref()).unwrap_or(true);
+        if let Some(settings) = settings.as_ref() {
             push_json_hooks(
-                &settings,
+                settings,
                 &settings_path,
                 ClientKind::Claude,
                 InventoryScope::User,
                 SourceKind::UserConfig,
                 None,
                 100,
-                enabled,
+                hooks_enabled,
                 TrustState::NotApplicable,
                 snapshot,
             );
         }
-        config
+        (config, hooks_enabled)
     }
 
     fn discover_local_mcps(
@@ -140,6 +138,7 @@ impl ClaudeAdapter {
                 Some(Path::new(project_path)),
                 300,
                 &disabled,
+                None,
                 trust_state,
                 snapshot,
             );
@@ -150,6 +149,7 @@ impl ClaudeAdapter {
         &self,
         context: &DiscoveryContext,
         user_state: Option<&Value>,
+        user_hooks_enabled: bool,
         snapshot: &mut InventorySnapshot,
     ) {
         for project_root in &context.project_roots {
@@ -163,6 +163,19 @@ impl ClaudeAdapter {
                     let disabled = project_state
                         .map(|state| disabled_names(state, "disabledMcpjsonServers"))
                         .unwrap_or_default();
+                    let approved = if project_state
+                        .and_then(|state| state.get("enableAllProjectMcpServers"))
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                    {
+                        None
+                    } else {
+                        Some(
+                            project_state
+                                .map(|state| disabled_names(state, "enabledMcpjsonServers"))
+                                .unwrap_or_default(),
+                        )
+                    };
                     push_json_mcps(
                         servers,
                         &mcp_path,
@@ -172,49 +185,64 @@ impl ClaudeAdapter {
                         Some(project_root),
                         200,
                         &disabled,
+                        approved.as_ref(),
                         trust_state,
                         snapshot,
                     );
                 }
             }
-            self.discover_project_hooks(project_root, "settings.json", 200, trust_state, snapshot);
-            self.discover_project_hooks(
-                project_root,
-                "settings.local.json",
-                300,
-                trust_state,
-                snapshot,
-            );
+            let settings_path = project_root.join(".claude/settings.json");
+            let local_settings_path = project_root.join(".claude/settings.local.json");
+            let settings = read_json(&settings_path, ClientKind::Claude, snapshot);
+            let local_settings = read_json(&local_settings_path, ClientKind::Claude, snapshot);
+            let hooks_enabled = hook_setting(local_settings.as_ref())
+                .or_else(|| hook_setting(settings.as_ref()))
+                .unwrap_or(user_hooks_enabled);
+            if let Some(settings) = settings.as_ref() {
+                self.push_project_hooks(
+                    project_root,
+                    &settings_path,
+                    settings,
+                    SourceKind::ProjectConfig,
+                    200,
+                    hooks_enabled,
+                    trust_state,
+                    snapshot,
+                );
+            }
+            if let Some(settings) = local_settings.as_ref() {
+                self.push_project_hooks(
+                    project_root,
+                    &local_settings_path,
+                    settings,
+                    SourceKind::LocalConfig,
+                    300,
+                    hooks_enabled,
+                    trust_state,
+                    snapshot,
+                );
+            }
         }
     }
 
-    fn discover_project_hooks(
+    #[allow(clippy::too_many_arguments)]
+    fn push_project_hooks(
         &self,
         project_root: &Path,
-        filename: &str,
+        settings_path: &Path,
+        settings: &Value,
+        source_kind: SourceKind,
         source_priority: u16,
+        enabled: bool,
         trust_state: TrustState,
         snapshot: &mut InventorySnapshot,
     ) {
-        let settings_path = project_root.join(".claude").join(filename);
-        let Some(settings) = read_json(&settings_path, ClientKind::Claude, snapshot) else {
-            return;
-        };
-        let enabled = settings
-            .get("disableAllHooks")
-            .and_then(Value::as_bool)
-            .map(|disabled| !disabled)
-            .unwrap_or(true);
         push_json_hooks(
-            &settings,
-            &settings_path,
+            settings,
+            settings_path,
             ClientKind::Claude,
             InventoryScope::Project,
-            if filename.ends_with("local.json") {
-                SourceKind::LocalConfig
-            } else {
-                SourceKind::ProjectConfig
-            },
+            source_kind,
             Some(project_root),
             source_priority,
             enabled,
@@ -222,6 +250,13 @@ impl ClaudeAdapter {
             snapshot,
         );
     }
+}
+
+fn hook_setting(settings: Option<&Value>) -> Option<bool> {
+    settings?
+        .get("disableAllHooks")
+        .and_then(Value::as_bool)
+        .map(|disabled| !disabled)
 }
 
 fn find_project_state<'a>(
