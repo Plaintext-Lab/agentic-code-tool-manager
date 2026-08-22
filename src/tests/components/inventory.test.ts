@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import InventoryTable from '$lib/components/inventory/InventoryTable.svelte';
+import { i18n } from '$lib/i18n';
 import type { InventoryRecord } from '$lib/types';
 
 const baseRecord: InventoryRecord = {
@@ -64,5 +65,17 @@ describe('InventoryTable', () => {
 		});
 
 		expect(screen.getAllByText('docs')).toHaveLength(2);
+	});
+
+	it('renders inventory labels in the selected language', () => {
+		i18n.setLocale('zh-CN');
+		try {
+			render(InventoryTable, { props: { records: [baseRecord] } });
+			expect(screen.getByRole('columnheader', { name: '工具' })).toBeInTheDocument();
+			expect(screen.getByText('用户配置')).toBeInTheDocument();
+			expect(screen.getByText('已启用')).toBeInTheDocument();
+		} finally {
+			i18n.setLocale('en');
+		}
 	});
 });

@@ -5,6 +5,7 @@ export type InventorySourceKind =
 	| 'userConfig'
 	| 'projectConfig'
 	| 'localConfig'
+	| 'managedConfig'
 	| 'userSkills'
 	| 'projectSkills'
 	| 'adminSkills'

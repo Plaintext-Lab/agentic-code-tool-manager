@@ -1,3 +1,4 @@
+use super::config::paths_differ;
 use super::models::{
     ClientKind, InventoryItemType, InventoryRecord, InventoryScope, InventorySnapshot,
     InventoryWarning, SourceKind, TrustState,
@@ -114,8 +115,8 @@ pub fn scan_skill_root(
         }
         let name = frontmatter_name.unwrap_or(folder_name);
         let original_path = skill_file.display().to_string();
-        let resolved_path = match std::fs::canonicalize(skill_file) {
-            Ok(path) => path.display().to_string(),
+        let resolved = match std::fs::canonicalize(skill_file) {
+            Ok(path) => path,
             Err(_) => {
                 push_skill_warning(
                     client,
@@ -126,6 +127,7 @@ pub fn scan_skill_root(
                 continue;
             }
         };
+        let resolved_path = resolved.display().to_string();
         let enabled =
             !disabled_paths.contains(&original_path) && !disabled_paths.contains(&resolved_path);
         let mut record = InventoryRecord::new(
@@ -141,7 +143,7 @@ pub fn scan_skill_root(
         );
         record.original_path = original_path.clone();
         record.resolved_path = Some(resolved_path.clone());
-        record.is_symlink = original_path != resolved_path;
+        record.is_symlink = paths_differ(skill_file, &resolved);
         record.enabled = Some(enabled);
         record.trust_state = TrustState::NotApplicable;
         record.is_effective = Some(enabled);

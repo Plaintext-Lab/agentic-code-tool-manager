@@ -96,6 +96,7 @@ pub fn push_json_mcps(
     source_priority: u16,
     disabled_names: &HashSet<String>,
     approved_names: Option<&HashSet<String>>,
+    policy_blocked_names: &HashSet<String>,
     trust_state: TrustState,
     snapshot: &mut InventorySnapshot,
 ) {
@@ -140,7 +141,7 @@ pub fn push_json_mcps(
         record.enabled = Some(enabled);
         record.trust_state = trust_state;
         let approved = approved_names.is_none_or(|names| names.contains(name));
-        record.is_effective = if enabled && !approved {
+        record.is_effective = if enabled && (!approved || policy_blocked_names.contains(name)) {
             Some(false)
         } else {
             effective_state(enabled, trust_state)
@@ -209,10 +210,32 @@ pub fn push_toml_mcps(
 
 pub fn apply_path_metadata(record: &mut InventoryRecord, path: &Path) {
     if let Ok(resolved) = std::fs::canonicalize(path) {
-        let resolved = resolved.display().to_string();
-        record.is_symlink = resolved != record.original_path;
-        record.resolved_path = Some(resolved);
+        record.is_symlink = paths_differ(Path::new(&record.original_path), &resolved);
+        record.resolved_path = Some(resolved.display().to_string());
     }
+}
+
+pub(super) fn paths_differ(original: &Path, resolved: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        normalize_windows_path(&original.to_string_lossy())
+            != normalize_windows_path(&resolved.to_string_lossy())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        original != resolved
+    }
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn normalize_windows_path(path: &str) -> String {
+    let normalized = path.replace('/', "\\");
+    let without_verbatim_prefix = normalized
+        .strip_prefix(r"\\?\UNC\")
+        .map(|path| format!(r"\\{path}"))
+        .or_else(|| normalized.strip_prefix(r"\\?\").map(str::to_string))
+        .unwrap_or(normalized);
+    without_verbatim_prefix.to_lowercase()
 }
 
 fn json_protected_fields(config: &Map<String, Value>) -> Vec<String> {
@@ -281,5 +304,22 @@ fn add_toml_table_count(
         if count > 0 {
             fields.push(format!("{label} ({count})"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_windows_path;
+
+    #[test]
+    fn normalizes_windows_verbatim_drive_and_unc_paths() {
+        assert_eq!(
+            normalize_windows_path(r"\\?\C:\Users\Ryan\.claude.json"),
+            normalize_windows_path(r"C:\Users\Ryan\.claude.json")
+        );
+        assert_eq!(
+            normalize_windows_path(r"\\?\UNC\server\share\SKILL.md"),
+            normalize_windows_path(r"\\server\share\SKILL.md")
+        );
     }
 }

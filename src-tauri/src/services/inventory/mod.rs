@@ -1,4 +1,5 @@
 mod claude;
+mod claude_policy;
 mod codex;
 mod config;
 mod cursor;
@@ -38,10 +39,30 @@ fn discover_inventory_with_codex_home(
     codex_home: PathBuf,
     project_roots: Vec<PathBuf>,
 ) -> InventorySnapshot {
+    let managed_settings_path = super::managed_settings::managed_settings_path();
+    let managed_mcp_path = managed_settings_path.with_file_name("managed-mcp.json");
+    discover_inventory_with_paths(
+        home_dir,
+        codex_home,
+        managed_settings_path,
+        managed_mcp_path,
+        project_roots,
+    )
+}
+
+fn discover_inventory_with_paths(
+    home_dir: PathBuf,
+    codex_home: PathBuf,
+    claude_managed_settings_path: PathBuf,
+    claude_managed_mcp_path: PathBuf,
+    project_roots: Vec<PathBuf>,
+) -> InventorySnapshot {
     let (project_roots, warnings) = existing_unique_roots(project_roots);
     let context = DiscoveryContext {
         home_dir,
         codex_home,
+        claude_managed_settings_path,
+        claude_managed_mcp_path,
         project_roots,
     };
     let mut snapshot = InventorySnapshot::new(context.project_roots.len());

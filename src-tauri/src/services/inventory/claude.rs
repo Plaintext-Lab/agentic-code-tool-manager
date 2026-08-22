@@ -1,3 +1,4 @@
+use super::claude_policy::ClaudeManagedPolicy;
 use super::config::{push_json_mcps, read_json};
 use super::hooks::push_json_hooks;
 use super::models::{
@@ -18,9 +19,46 @@ impl ClientAdapter for ClaudeAdapter {
     }
 
     fn discover(&self, context: &DiscoveryContext, snapshot: &mut InventorySnapshot) {
+        let managed_settings = read_json(
+            &context.claude_managed_settings_path,
+            ClientKind::Claude,
+            snapshot,
+        );
+        let managed_mcp = read_json(
+            &context.claude_managed_mcp_path,
+            ClientKind::Claude,
+            snapshot,
+        );
+        let policy = ClaudeManagedPolicy::new(
+            managed_settings.as_ref(),
+            context.claude_managed_mcp_path.exists(),
+        );
         self.discover_skills(context, snapshot);
-        let (user_state, user_hooks_enabled) = self.discover_user_state(context, snapshot);
-        self.discover_project_configs(context, user_state.as_ref(), user_hooks_enabled, snapshot);
+        self.discover_managed_state(
+            context,
+            managed_settings.as_ref(),
+            managed_mcp.as_ref(),
+            &policy,
+            snapshot,
+        );
+        let (user_state, user_hooks_enabled) = self.discover_user_state(context, &policy, snapshot);
+        self.discover_project_configs(
+            context,
+            user_state.as_ref(),
+            user_hooks_enabled,
+            &policy,
+            snapshot,
+        );
+        if policy.managed_mcp_exclusive {
+            for record in &mut snapshot.records {
+                if record.client == ClientKind::Claude
+                    && record.item_type == super::models::InventoryItemType::Mcp
+                    && record.source_kind != SourceKind::ManagedConfig
+                {
+                    record.is_effective = Some(false);
+                }
+            }
+        }
     }
 }
 
@@ -58,12 +96,14 @@ impl ClaudeAdapter {
     fn discover_user_state(
         &self,
         context: &DiscoveryContext,
+        policy: &ClaudeManagedPolicy,
         snapshot: &mut InventorySnapshot,
     ) -> (Option<Value>, bool) {
         let claude_json_path = context.home_dir.join(".claude.json");
         let config = read_json(&claude_json_path, ClientKind::Claude, snapshot);
         if let Some(config) = config.as_ref() {
             if let Some(servers) = config.get("mcpServers").and_then(Value::as_object) {
+                let policy_blocked = policy.blocked_names(servers);
                 push_json_mcps(
                     servers,
                     &claude_json_path,
@@ -74,16 +114,18 @@ impl ClaudeAdapter {
                     100,
                     &HashSet::new(),
                     None,
+                    &policy_blocked,
                     TrustState::NotApplicable,
                     snapshot,
                 );
             }
-            self.discover_local_mcps(config, &claude_json_path, snapshot);
+            self.discover_local_mcps(config, &claude_json_path, policy, snapshot);
         }
 
         let settings_path = context.home_dir.join(".claude/settings.json");
         let settings = read_json(&settings_path, ClientKind::Claude, snapshot);
-        let hooks_enabled = hook_setting(settings.as_ref()).unwrap_or(true);
+        let hooks_enabled =
+            hook_setting(settings.as_ref()).unwrap_or(true) && !policy.allow_managed_hooks_only;
         if let Some(settings) = settings.as_ref() {
             push_json_hooks(
                 settings,
@@ -105,6 +147,7 @@ impl ClaudeAdapter {
         &self,
         config: &Value,
         config_path: &Path,
+        policy: &ClaudeManagedPolicy,
         snapshot: &mut InventorySnapshot,
     ) {
         let Some(projects) = config.get("projects").and_then(Value::as_object) else {
@@ -129,6 +172,7 @@ impl ClaudeAdapter {
                 })
                 .unwrap_or_default();
             let trust_state = project_trust_state(project_config);
+            let policy_blocked = policy.blocked_names(servers);
             push_json_mcps(
                 servers,
                 config_path,
@@ -139,6 +183,7 @@ impl ClaudeAdapter {
                 300,
                 &disabled,
                 None,
+                &policy_blocked,
                 trust_state,
                 snapshot,
             );
@@ -150,6 +195,7 @@ impl ClaudeAdapter {
         context: &DiscoveryContext,
         user_state: Option<&Value>,
         user_hooks_enabled: bool,
+        policy: &ClaudeManagedPolicy,
         snapshot: &mut InventorySnapshot,
     ) {
         for project_root in &context.project_roots {
@@ -176,6 +222,7 @@ impl ClaudeAdapter {
                                 .unwrap_or_default(),
                         )
                     };
+                    let policy_blocked = policy.blocked_names(servers);
                     push_json_mcps(
                         servers,
                         &mcp_path,
@@ -186,6 +233,7 @@ impl ClaudeAdapter {
                         200,
                         &disabled,
                         approved.as_ref(),
+                        &policy_blocked,
                         trust_state,
                         snapshot,
                     );
@@ -197,7 +245,8 @@ impl ClaudeAdapter {
             let local_settings = read_json(&local_settings_path, ClientKind::Claude, snapshot);
             let hooks_enabled = hook_setting(local_settings.as_ref())
                 .or_else(|| hook_setting(settings.as_ref()))
-                .unwrap_or(user_hooks_enabled);
+                .unwrap_or(user_hooks_enabled)
+                && !policy.allow_managed_hooks_only;
             if let Some(settings) = settings.as_ref() {
                 self.push_project_hooks(
                     project_root,
@@ -222,6 +271,50 @@ impl ClaudeAdapter {
                     snapshot,
                 );
             }
+        }
+    }
+
+    fn discover_managed_state(
+        &self,
+        context: &DiscoveryContext,
+        managed_settings: Option<&Value>,
+        managed_mcp: Option<&Value>,
+        policy: &ClaudeManagedPolicy,
+        snapshot: &mut InventorySnapshot,
+    ) {
+        if let Some(settings) = managed_settings {
+            push_json_hooks(
+                settings,
+                &context.claude_managed_settings_path,
+                ClientKind::Claude,
+                InventoryScope::Admin,
+                SourceKind::ManagedConfig,
+                None,
+                400,
+                hook_setting(Some(settings)).unwrap_or(true),
+                TrustState::NotApplicable,
+                snapshot,
+            );
+        }
+        if let Some(servers) = managed_mcp
+            .and_then(|config| config.get("mcpServers"))
+            .and_then(Value::as_object)
+        {
+            let policy_blocked = policy.blocked_names(servers);
+            push_json_mcps(
+                servers,
+                &context.claude_managed_mcp_path,
+                ClientKind::Claude,
+                InventoryScope::Admin,
+                SourceKind::ManagedConfig,
+                None,
+                400,
+                &HashSet::new(),
+                None,
+                &policy_blocked,
+                TrustState::NotApplicable,
+                snapshot,
+            );
         }
     }
 

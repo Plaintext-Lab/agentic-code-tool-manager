@@ -1,5 +1,8 @@
 use super::models::{ClientKind, InventoryItemType, SourceKind, TrustState};
-use super::{codex_home_path, discover_inventory, discover_inventory_with_codex_home};
+use super::{
+    codex_home_path, discover_inventory, discover_inventory_with_codex_home,
+    discover_inventory_with_paths,
+};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -485,6 +488,147 @@ fn codex_inline_hooks_use_effective_feature_state() {
     assert!(hooks
         .iter()
         .all(|record| record.is_effective == Some(false)));
+}
+
+#[test]
+fn duplicate_codex_skills_report_contextual_precedence() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let project = fixture.path().join("project");
+    write_skill(&home.join(".agents/skills/shared-skill/SKILL.md"));
+    write_skill(&project.join(".agents/skills/shared-skill/SKILL.md"));
+    write_skill(&project.join(".codex/skills/shared-skill/SKILL.md"));
+
+    let snapshot = discover_inventory(home, vec![project]);
+    let skills: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| {
+            record.client == ClientKind::Codex
+                && record.item_type == InventoryItemType::Skill
+                && record.name == "shared-skill"
+        })
+        .collect();
+
+    assert_eq!(skills.len(), 3);
+    let user = skills
+        .iter()
+        .find(|record| record.scope == super::models::InventoryScope::User)
+        .expect("user skill should be discovered");
+    let project_skill = skills
+        .iter()
+        .find(|record| record.source_kind == SourceKind::ProjectSkills)
+        .expect("project skill should be discovered");
+    let legacy = skills
+        .iter()
+        .find(|record| record.source_kind == SourceKind::LegacySkills)
+        .expect("legacy project skill should be discovered");
+
+    assert_eq!(user.is_effective, None);
+    assert_eq!(project_skill.is_effective, Some(true));
+    assert_eq!(legacy.is_effective, Some(false));
+}
+
+#[test]
+fn claude_managed_policy_controls_hooks_and_mcps() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let managed_settings = fixture.path().join("managed-settings.json");
+    let managed_mcp = fixture.path().join("managed-mcp-missing.json");
+    write(
+        &home.join(".claude.json"),
+        r#"{
+            "mcpServers": {
+                "allowed": {"command": "allowed-server"},
+                "denied": {"command": "denied-server"},
+                "unlisted": {"command": "unlisted-server"}
+            }
+        }"#,
+    );
+    write(
+        &home.join(".claude/settings.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"user-hook"}]}]}}"#,
+    );
+    write(
+        &managed_settings,
+        r#"{
+            "allowManagedHooksOnly": true,
+            "allowedMcpServers": [{"serverName": "allowed"}],
+            "deniedMcpServers": [{"serverName": "denied"}],
+            "hooks":{"Stop":[{"hooks":[{"type":"command","command":"managed-hook"}]}]}
+        }"#,
+    );
+
+    let snapshot = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings,
+        managed_mcp,
+        Vec::new(),
+    );
+    let mcp = |name: &str| {
+        snapshot
+            .records
+            .iter()
+            .find(|record| record.client == ClientKind::Claude && record.name == name)
+            .expect("Claude MCP should be discovered")
+    };
+    assert_eq!(mcp("allowed").is_effective, Some(true));
+    assert_eq!(mcp("denied").is_effective, Some(false));
+    assert_eq!(mcp("unlisted").is_effective, Some(false));
+
+    let hooks: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| {
+            record.client == ClientKind::Claude && record.item_type == InventoryItemType::Hook
+        })
+        .collect();
+    assert!(hooks.iter().any(|record| {
+        record.source_kind == SourceKind::ManagedConfig && record.is_effective == Some(true)
+    }));
+    assert!(hooks.iter().any(|record| {
+        record.source_kind == SourceKind::UserConfig && record.is_effective == Some(false)
+    }));
+}
+
+#[test]
+fn managed_mcp_file_excludes_user_configured_servers() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let managed_settings = fixture.path().join("managed-settings-missing.json");
+    let managed_mcp = fixture.path().join("managed-mcp.json");
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers":{"shared-server":{"command":"user-command"}}}"#,
+    );
+    write(
+        &managed_mcp,
+        r#"{"mcpServers":{"shared-server":{"command":"managed-command"}}}"#,
+    );
+
+    let snapshot = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings,
+        managed_mcp,
+        Vec::new(),
+    );
+    let user = snapshot
+        .records
+        .iter()
+        .find(|record| record.source_kind == SourceKind::UserConfig)
+        .expect("user MCP should remain visible");
+    let managed = snapshot
+        .records
+        .iter()
+        .find(|record| record.source_kind == SourceKind::ManagedConfig)
+        .expect("managed MCP should be discovered");
+
+    assert_eq!(user.is_effective, Some(false));
+    assert_eq!(managed.scope, super::models::InventoryScope::Admin);
+    assert_eq!(managed.source_kind, SourceKind::ManagedConfig);
+    assert_eq!(managed.is_effective, Some(true));
 }
 
 #[cfg(unix)]

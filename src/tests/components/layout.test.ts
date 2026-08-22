@@ -23,6 +23,7 @@ vi.mock('$lib/stores', () => ({
 				'nav.insights': 'Insights',
 				'nav.dashboard': 'Dashboard',
 				'nav.projects': 'Projects',
+				'nav.inventory': 'Inventory',
 				'nav.mcps': 'MCPs',
 				'nav.agents': 'Agents',
 				'nav.skills': 'Skills',

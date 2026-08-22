@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -64,6 +64,7 @@ pub enum SourceKind {
     UserConfig,
     ProjectConfig,
     LocalConfig,
+    ManagedConfig,
     UserSkills,
     ProjectSkills,
     AdminSkills,
@@ -217,24 +218,8 @@ impl InventorySnapshot {
     }
 
     pub fn finish(mut self) -> Self {
-        let project_mcp_records: HashSet<_> = self
-            .records
-            .iter()
-            .filter(|record| {
-                record.item_type == InventoryItemType::Mcp && record.project_path.is_some()
-            })
-            .map(|record| (record.client, record.name.clone()))
-            .collect();
-        for record in &mut self.records {
-            if record.item_type == InventoryItemType::Mcp
-                && record.project_path.is_none()
-                && record.enabled != Some(false)
-                && record.trust_state != TrustState::Untrusted
-                && project_mcp_records.contains(&(record.client, record.name.clone()))
-            {
-                record.is_effective = None;
-            }
-        }
+        reconcile_contextual_effectiveness(&mut self.records, InventoryItemType::Skill);
+        reconcile_contextual_effectiveness(&mut self.records, InventoryItemType::Mcp);
         let mut seen = HashSet::new();
         self.records.retain(|record| seen.insert(record.id.clone()));
         self.records.sort_by(|left, right| {
@@ -265,10 +250,102 @@ impl InventorySnapshot {
     }
 }
 
+fn reconcile_contextual_effectiveness(
+    records: &mut [InventoryRecord],
+    item_type: InventoryItemType,
+) {
+    let groups: HashSet<_> = records
+        .iter()
+        .filter(|record| record.item_type == item_type)
+        .map(|record| (record.client, record.name.clone()))
+        .collect();
+    for (client, name) in groups {
+        let enabled_indices: Vec<_> = records
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| {
+                record.client == client
+                    && record.item_type == item_type
+                    && record.name == name
+                    && record.enabled == Some(true)
+                    && record.is_effective != Some(false)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let global_indices: Vec<_> = enabled_indices
+            .iter()
+            .copied()
+            .filter(|index| records[*index].project_path.is_none())
+            .collect();
+        let mut states = HashMap::new();
+        apply_context_states(records, &global_indices, &mut states);
+
+        let project_paths: HashSet<_> = enabled_indices
+            .iter()
+            .filter_map(|index| records[*index].project_path.clone())
+            .collect();
+        for project_path in project_paths {
+            let mut contextual_indices = global_indices.clone();
+            contextual_indices.extend(enabled_indices.iter().copied().filter(|index| {
+                records[*index].project_path.as_deref() == Some(project_path.as_str())
+            }));
+            let context_states = context_states(records, &contextual_indices);
+            for index in contextual_indices {
+                let context_state = context_states[&index];
+                if records[index].project_path.is_some() {
+                    states.insert(index, context_state);
+                } else if states.get(&index) == Some(&Some(true)) && context_state != Some(true) {
+                    states.insert(index, None);
+                }
+            }
+        }
+        for (index, state) in states {
+            records[index].is_effective = state;
+        }
+    }
+}
+
+fn apply_context_states(
+    records: &[InventoryRecord],
+    indices: &[usize],
+    states: &mut HashMap<usize, Option<bool>>,
+) {
+    states.extend(context_states(records, indices));
+}
+
+fn context_states(records: &[InventoryRecord], indices: &[usize]) -> HashMap<usize, Option<bool>> {
+    let Some(max_priority) = indices
+        .iter()
+        .map(|index| records[*index].source_priority)
+        .max()
+    else {
+        return HashMap::new();
+    };
+    let winner_count = indices
+        .iter()
+        .filter(|index| records[**index].source_priority == max_priority)
+        .count();
+    indices
+        .iter()
+        .map(|index| {
+            let state = if records[*index].source_priority < max_priority {
+                Some(false)
+            } else if winner_count == 1 {
+                records[*index].is_effective
+            } else {
+                None
+            };
+            (*index, state)
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct DiscoveryContext {
     pub home_dir: PathBuf,
     pub codex_home: PathBuf,
+    pub claude_managed_settings_path: PathBuf,
+    pub claude_managed_mcp_path: PathBuf,
     pub project_roots: Vec<PathBuf>,
 }
 

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { Link, ShieldCheck } from 'lucide-svelte';
+	import { i18n } from '$lib/stores';
+	import type { TranslationKey } from '$lib/i18n';
 	import type {
 		InventoryClient,
 		InventoryItemType,
@@ -16,33 +18,49 @@
 		codex: 'Codex',
 		cursor: 'Cursor'
 	};
-	const itemLabels: Record<InventoryItemType, string> = {
-		skill: 'Skill',
-		mcp: 'MCP',
-		hook: 'Hook'
+	const itemLabels: Record<InventoryItemType, TranslationKey> = {
+		skill: 'inventory.skill',
+		mcp: 'inventory.mcp',
+		hook: 'inventory.hook'
 	};
-	const scopeLabels: Record<InventoryScope, string> = {
-		user: 'User',
-		project: 'Project',
-		admin: 'Admin',
-		legacy: 'Legacy'
+	const scopeLabels: Record<InventoryScope, TranslationKey> = {
+		user: 'inventory.scopeUser',
+		project: 'inventory.scopeProject',
+		admin: 'inventory.scopeAdmin',
+		legacy: 'inventory.scopeLegacy'
 	};
-	const sourceLabels: Record<InventorySourceKind, string> = {
-		userConfig: 'User config',
-		projectConfig: 'Project config',
-		localConfig: 'Local config',
-		userSkills: 'User skills',
-		projectSkills: 'Project skills',
-		adminSkills: 'Admin skills',
-		legacySkills: 'Legacy skills'
+	const sourceLabels: Record<InventorySourceKind, TranslationKey> = {
+		userConfig: 'inventory.sourceUserConfig',
+		projectConfig: 'inventory.sourceProjectConfig',
+		localConfig: 'inventory.sourceLocalConfig',
+		managedConfig: 'inventory.sourceManagedConfig',
+		userSkills: 'inventory.sourceUserSkills',
+		projectSkills: 'inventory.sourceProjectSkills',
+		adminSkills: 'inventory.sourceAdminSkills',
+		legacySkills: 'inventory.sourceLegacySkills'
 	};
 
 	function statusLabel(record: InventoryRecord): string {
-		if (record.enabled === null) return 'Status not reported';
-		if (!record.enabled) return 'Disabled';
-		if (record.isEffective === false) return 'Not effective';
-		if (record.isEffective === null) return 'Effectiveness depends on context';
-		return 'Enabled';
+		if (record.enabled === null) return i18n.t('inventory.statusNotReported');
+		if (!record.enabled) return i18n.t('inventory.statusDisabled');
+		if (record.isEffective === false) return i18n.t('inventory.statusNotEffective');
+		if (record.isEffective === null) return i18n.t('inventory.statusContextual');
+		return i18n.t('inventory.statusEnabled');
+	}
+
+	function detailLabel(detail: string | null): string | null {
+		if (!detail) return null;
+		const labels: Record<string, TranslationKey> = {
+			'HTTP MCP server': 'inventory.detailHttpMcp',
+			'STDIO MCP server': 'inventory.detailStdioMcp',
+			'MCP server': 'inventory.detailMcp',
+			'command handler': 'inventory.detailCommandHandler',
+			'prompt handler': 'inventory.detailPromptHandler',
+			'agent handler': 'inventory.detailAgentHandler',
+			'http handler': 'inventory.detailHttpHandler',
+			'mcp_tool handler': 'inventory.detailMcpToolHandler'
+		};
+		return labels[detail] ? i18n.t(labels[detail]) : detail;
 	}
 </script>
 
@@ -51,10 +69,10 @@
 		<table class="w-full text-left text-sm">
 			<thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-500 dark:bg-gray-800/70 dark:text-gray-400">
 				<tr>
-					<th class="px-4 py-3 font-semibold" scope="col">Tool</th>
-					<th class="px-4 py-3 font-semibold" scope="col">Client</th>
-					<th class="px-4 py-3 font-semibold" scope="col">Source</th>
-					<th class="px-4 py-3 font-semibold" scope="col">Status</th>
+					<th class="px-4 py-3 font-semibold" scope="col">{i18n.t('inventory.columnTool')}</th>
+					<th class="px-4 py-3 font-semibold" scope="col">{i18n.t('inventory.columnClient')}</th>
+					<th class="px-4 py-3 font-semibold" scope="col">{i18n.t('inventory.columnSource')}</th>
+					<th class="px-4 py-3 font-semibold" scope="col">{i18n.t('inventory.columnStatus')}</th>
 				</tr>
 			</thead>
 			<tbody class="divide-y divide-gray-200 dark:divide-gray-700">
@@ -63,23 +81,23 @@
 						<td class="px-4 py-4">
 							<div class="font-medium text-gray-900 dark:text-white">{record.name}</div>
 							<div class="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-								<span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-700">{itemLabels[record.itemType]}</span>
-								{#if record.detail}<span>{record.detail}</span>{/if}
+								<span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-700">{i18n.t(itemLabels[record.itemType])}</span>
+								{#if detailLabel(record.detail)}<span>{detailLabel(record.detail)}</span>{/if}
 							</div>
 						</td>
 						<td class="px-4 py-4">
 							<span class="font-medium">{clientLabels[record.client]}</span>
-							<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{scopeLabels[record.scope]} scope</div>
+							<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{i18n.t('inventory.scopeLabel', { scope: i18n.t(scopeLabels[record.scope]) })}</div>
 						</td>
 						<td class="max-w-xl px-4 py-4">
-							<div>{sourceLabels[record.sourceKind]}</div>
+							<div>{i18n.t(sourceLabels[record.sourceKind])}</div>
 							<details class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-								<summary class="cursor-pointer select-none">Show location</summary>
+								<summary class="cursor-pointer select-none">{i18n.t('inventory.showLocation')}</summary>
 								<div class="mt-2 space-y-1.5">
 									<code class="block break-all rounded bg-gray-100 px-2 py-1 dark:bg-gray-800">{record.sourcePath}</code>
-									{#if record.projectPath}<p class="break-all">Project: {record.projectPath}</p>{/if}
+									{#if record.projectPath}<p class="break-all">{i18n.t('inventory.projectLabel')}: {record.projectPath}</p>{/if}
 									{#if record.isSymlink && record.resolvedPath}
-										<p class="flex items-start gap-1 break-all"><Link class="mt-0.5 h-3 w-3 shrink-0" />Resolves to {record.resolvedPath}</p>
+										<p class="flex items-start gap-1 break-all"><Link class="mt-0.5 h-3 w-3 shrink-0" />{i18n.t('inventory.resolvesTo')} {record.resolvedPath}</p>
 									{/if}
 								</div>
 							</details>
@@ -87,16 +105,16 @@
 						<td class="px-4 py-4">
 							<span class="font-medium {record.enabled === false || record.isEffective === false ? 'text-amber-700 dark:text-amber-400' : ''}">{statusLabel(record)}</span>
 							{#if record.trustState === 'unknown'}
-								<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">Trust not reported</div>
+								<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{i18n.t('inventory.trustNotReported')}</div>
 							{:else if record.trustState === 'trusted'}
-								<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">Project trusted</div>
+								<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{i18n.t('inventory.projectTrusted')}</div>
 							{:else if record.trustState === 'untrusted'}
-								<div class="mt-1 text-xs text-amber-700 dark:text-amber-400">Project not trusted</div>
+								<div class="mt-1 text-xs text-amber-700 dark:text-amber-400">{i18n.t('inventory.projectNotTrusted')}</div>
 							{/if}
 							{#if record.protectedFields.length > 0}
 								<div class="mt-2 flex items-start gap-1.5 text-xs text-emerald-700 dark:text-emerald-400" title={record.protectedFields.join(', ')}>
 									<ShieldCheck class="mt-0.5 h-3.5 w-3.5 shrink-0" />
-									<span>{record.protectedFields.length} protected field {record.protectedFields.length === 1 ? 'group' : 'groups'} hidden</span>
+									<span>{i18n.t(record.protectedFields.length === 1 ? 'inventory.protectedField' : 'inventory.protectedFields', { count: record.protectedFields.length })}</span>
 								</div>
 							{/if}
 						</td>

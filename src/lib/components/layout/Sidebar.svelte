@@ -69,7 +69,7 @@
 			items: [
 				{ href: '/', label: i18n.t('nav.dashboard'), icon: Plug },
 				{ href: '/projects', label: i18n.t('nav.projects'), icon: FolderOpen },
-				{ href: '/inventory', label: 'Inventory', icon: Boxes }
+				{ href: '/inventory', label: i18n.t('nav.inventory'), icon: Boxes }
 			]
 		},
 		{
