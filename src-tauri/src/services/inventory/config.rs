@@ -52,9 +52,33 @@ fn read_config(
     format_name: &str,
     snapshot: &mut InventorySnapshot,
 ) -> Option<String> {
-    let metadata = match std::fs::metadata(path) {
+    let link_metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(_) => {
+            snapshot.warnings.push(InventoryWarning::new(
+                client,
+                path.display().to_string(),
+                format!("Could not read this {format_name} configuration."),
+            ));
+            return None;
+        }
+    };
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && link_metadata.file_type().is_symlink() =>
+        {
+            snapshot.warnings.push(InventoryWarning::new(
+                client,
+                path.display().to_string(),
+                format!(
+                    "Skipped this {format_name} configuration because its symlink target is unavailable."
+                ),
+            ));
+            return None;
+        }
         Err(_) => {
             snapshot.warnings.push(InventoryWarning::new(
                 client,
@@ -119,12 +143,13 @@ pub fn push_json_mcps(
                     .map(|value| !value)
             })
             .unwrap_or_else(|| !disabled_names.contains(name));
-        let detail = if config.contains_key("url") {
-            "HTTP MCP server"
-        } else if config.contains_key("command") {
-            "STDIO MCP server"
-        } else {
-            "MCP server"
+        let Some(detail) = json_transport_detail(config) else {
+            snapshot.warnings.push(InventoryWarning::new(
+                client,
+                config_path.display().to_string(),
+                "Skipped an MCP entry because it has no usable transport.",
+            ));
+            continue;
         };
         let mut record = InventoryRecord::new(
             client,
@@ -180,12 +205,13 @@ pub fn push_toml_mcps(
             .get("enabled")
             .and_then(toml::Value::as_bool)
             .unwrap_or(true);
-        let detail = if server.contains_key("url") {
-            "HTTP MCP server"
-        } else if server.contains_key("command") {
-            "STDIO MCP server"
-        } else {
-            "MCP server"
+        let Some(detail) = toml_transport_detail(server) else {
+            snapshot.warnings.push(InventoryWarning::new(
+                client,
+                config_path.display().to_string(),
+                "Skipped an MCP entry because it has no usable transport.",
+            ));
+            continue;
         };
         let mut record = InventoryRecord::new(
             client,
@@ -213,6 +239,36 @@ pub fn apply_path_metadata(record: &mut InventoryRecord, path: &Path) {
         record.is_symlink = paths_differ(Path::new(&record.original_path), &resolved);
         record.resolved_path = Some(resolved.display().to_string());
     }
+}
+
+fn json_transport_detail(config: &Map<String, Value>) -> Option<&'static str> {
+    if config
+        .get("url")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Some("HTTP MCP server");
+    }
+    config
+        .get("command")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(|_| "STDIO MCP server")
+}
+
+fn toml_transport_detail(config: &toml::map::Map<String, toml::Value>) -> Option<&'static str> {
+    if config
+        .get("url")
+        .and_then(toml::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Some("HTTP MCP server");
+    }
+    config
+        .get("command")
+        .and_then(toml::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(|_| "STDIO MCP server")
 }
 
 pub(super) fn paths_differ(original: &Path, resolved: &Path) -> bool {

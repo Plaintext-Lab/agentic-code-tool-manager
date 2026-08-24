@@ -723,6 +723,154 @@ fn discovers_valid_top_level_skill_with_pruned_directory_name() {
 }
 
 #[test]
+fn ignores_skill_files_nested_inside_a_skill() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    write(
+        &home.join(".agents/skills/parent/SKILL.md"),
+        "---\nname: parent\ndescription: Parent skill\n---\n",
+    );
+    write(
+        &home.join(".agents/skills/parent/references/example/SKILL.md"),
+        "---\nname: nested-support-file\ndescription: Support fixture\n---\n",
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+
+    assert!(snapshot.records.iter().any(|record| {
+        record.client == ClientKind::Codex
+            && record.item_type == InventoryItemType::Skill
+            && record.name == "parent"
+    }));
+    assert!(!snapshot.records.iter().any(|record| {
+        record.client == ClientKind::Codex
+            && record.item_type == InventoryItemType::Skill
+            && record.name == "nested-support-file"
+    }));
+}
+
+#[test]
+fn required_skill_name_missing_is_not_effective() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    write(
+        &home.join(".agents/skills/missing-name/SKILL.md"),
+        "---\ndescription: Missing name fixture\n---\n",
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+    let skill = snapshot
+        .records
+        .iter()
+        .find(|record| record.client == ClientKind::Codex && record.name == "missing-name")
+        .expect("invalid skill should remain visible");
+
+    assert_eq!(skill.enabled, Some(true));
+    assert_eq!(skill.is_effective, Some(false));
+    assert!(snapshot.warnings.iter().any(|warning| {
+        warning.source_path.ends_with("missing-name/SKILL.md")
+            && warning.message.contains("frontmatter name")
+    }));
+}
+
+#[test]
+fn malformed_mcp_transports_are_skipped_with_warnings() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers":{"valid-json":{"command":"server"},"empty-json":{},"null-url":{"url":null}}}"#,
+    );
+    write(
+        &home.join(".codex/config.toml"),
+        "[mcp_servers.valid-toml]\ncommand = 'server'\n\n[mcp_servers.empty-toml]\nenabled = true\n\n[mcp_servers.blank-url]\nurl = '   '\n",
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+
+    for name in ["valid-json", "valid-toml"] {
+        assert!(snapshot.records.iter().any(|record| record.name == name));
+    }
+    for name in ["empty-json", "null-url", "empty-toml", "blank-url"] {
+        assert!(!snapshot.records.iter().any(|record| record.name == name));
+    }
+    assert_eq!(
+        snapshot
+            .warnings
+            .iter()
+            .filter(|warning| warning.message.contains("usable transport"))
+            .count(),
+        4
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_configuration_symlink_produces_a_warning() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let config_path = home.join(".cursor/mcp.json");
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    symlink(fixture.path().join("missing-mcp.json"), &config_path).unwrap();
+
+    let snapshot = discover_inventory(home, Vec::new());
+
+    assert!(snapshot.warnings.iter().any(|warning| {
+        warning.source_path == config_path.display().to_string()
+            && warning.message.contains("symlink")
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn canonicalizes_local_claude_project_paths_before_precedence() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let project = fixture.path().join("project");
+    let project_link = fixture.path().join("project-link");
+    write(
+        &project.join(".mcp.json"),
+        r#"{"mcpServers":{"shared":{"command":"project-server"}}}"#,
+    );
+    symlink(&project, &project_link).unwrap();
+    write(
+        &home.join(".claude.json"),
+        &format!(
+            r#"{{"projects":{{"{}":{{"hasTrustDialogAccepted":true,"enableAllProjectMcpServers":true,"mcpServers":{{"shared":{{"command":"local-server"}}}}}}}}}}"#,
+            project_link.display()
+        ),
+    );
+
+    let snapshot = discover_inventory(home, vec![project_link]);
+    let local = snapshot
+        .records
+        .iter()
+        .find(|record| {
+            record.client == ClientKind::Claude
+                && record.name == "shared"
+                && record.source_kind == SourceKind::LocalConfig
+        })
+        .expect("local MCP should be discovered");
+    let project_config = snapshot
+        .records
+        .iter()
+        .find(|record| {
+            record.client == ClientKind::Claude
+                && record.name == "shared"
+                && record.source_kind == SourceKind::ProjectConfig
+        })
+        .expect("project MCP should be discovered");
+
+    assert_eq!(local.project_path, project_config.project_path);
+    assert_eq!(local.is_effective, Some(true));
+    assert_eq!(project_config.is_effective, Some(false));
+}
+
+#[test]
 fn malformed_hook_handlers_are_skipped_with_a_warning() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");

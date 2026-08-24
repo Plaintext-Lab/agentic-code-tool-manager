@@ -9,7 +9,7 @@ use super::skills::{discover_project_skill_roots, scan_skill_root};
 use super::ClientAdapter;
 use serde_json::Value;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct ClaudeAdapter;
 
@@ -119,7 +119,7 @@ impl ClaudeAdapter {
                     snapshot,
                 );
             }
-            self.discover_local_mcps(config, &claude_json_path, policy, snapshot);
+            self.discover_local_mcps(config, &claude_json_path, context, policy, snapshot);
         }
 
         let settings_path = context.home_dir.join(".claude/settings.json");
@@ -150,6 +150,7 @@ impl ClaudeAdapter {
         &self,
         config: &Value,
         config_path: &Path,
+        context: &DiscoveryContext,
         policy: &ClaudeManagedPolicy,
         snapshot: &mut InventorySnapshot,
     ) {
@@ -157,6 +158,8 @@ impl ClaudeAdapter {
             return;
         };
         for (project_path, project_config) in projects {
+            let project_path =
+                registered_project_path(Path::new(project_path), &context.project_roots);
             let Some(project_config) = project_config.as_object() else {
                 continue;
             };
@@ -182,7 +185,7 @@ impl ClaudeAdapter {
                 ClientKind::Claude,
                 InventoryScope::Project,
                 SourceKind::LocalConfig,
-                Some(Path::new(project_path)),
+                Some(project_path),
                 300,
                 &disabled,
                 None,
@@ -348,6 +351,19 @@ impl ClaudeAdapter {
             snapshot,
         );
     }
+}
+
+fn registered_project_path<'a>(project_path: &'a Path, project_roots: &'a [PathBuf]) -> &'a Path {
+    let canonical_path = std::fs::canonicalize(project_path).ok();
+    project_roots
+        .iter()
+        .find(|root| {
+            root.as_path() == project_path
+                || canonical_path
+                    .as_ref()
+                    .is_some_and(|candidate| candidate == *root)
+        })
+        .map_or(project_path, PathBuf::as_path)
 }
 
 fn hook_setting(settings: Option<&Value>) -> Option<bool> {

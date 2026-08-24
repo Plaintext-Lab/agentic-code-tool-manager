@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use walkdir::{DirEntry, WalkDir};
 
 const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
-const MAX_PROJECT_SCAN_DEPTH: usize = 10;
+const MAX_SKILL_SCAN_DEPTH: usize = 2;
 
 #[allow(clippy::too_many_arguments)]
 pub fn scan_skill_root(
@@ -37,7 +37,7 @@ pub fn scan_skill_root(
 
     let walker = WalkDir::new(root)
         .follow_links(true)
-        .max_depth(MAX_PROJECT_SCAN_DEPTH)
+        .max_depth(MAX_SKILL_SCAN_DEPTH)
         .into_iter()
         .filter_entry(should_descend);
     let mut ordinal = 0;
@@ -105,7 +105,8 @@ pub fn scan_skill_root(
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_else(|| "Unnamed skill".to_string());
         let frontmatter_name = parse_frontmatter_name(&content);
-        if require_frontmatter_name && frontmatter_name.is_none() {
+        let has_required_name = !require_frontmatter_name || frontmatter_name.is_some();
+        if !has_required_name {
             push_skill_warning(
                 client,
                 skill_file,
@@ -146,7 +147,7 @@ pub fn scan_skill_root(
         record.is_symlink = paths_differ(skill_file, &resolved);
         record.enabled = Some(enabled);
         record.trust_state = TrustState::NotApplicable;
-        record.is_effective = Some(enabled);
+        record.is_effective = Some(enabled && has_required_name);
         snapshot.records.push(record);
         ordinal += 1;
     }
@@ -220,18 +221,7 @@ fn should_descend(entry: &DirEntry) -> bool {
         return true;
     }
     let directory_name = entry.file_name().to_string_lossy();
-    if matches!(directory_name.as_ref(), ".git" | "node_modules" | ".venv") {
-        return false;
-    }
-    let is_support_directory = entry
-        .path()
-        .parent()
-        .is_some_and(|parent| parent.join("SKILL.md").is_file());
-    !is_support_directory
-        || !matches!(
-            directory_name.as_ref(),
-            "target" | "dist" | "build" | "vendor"
-        )
+    !matches!(directory_name.as_ref(), ".git" | "node_modules" | ".venv")
 }
 
 fn push_skill_warning(
