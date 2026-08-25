@@ -1,0 +1,11 @@
+[mcp_servers.shared-server]
+command = "npx"
+args = ["-y", "example-server"]
+env = { API_KEY = "CODEX_SECRET_VALUE" }
+enabled = true
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "python3 /private/stop.py --token CODEX_HOOK_SECRET"

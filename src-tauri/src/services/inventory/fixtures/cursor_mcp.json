@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "shared-server": {
+      "url": "https://example.invalid/mcp?token=CURSOR_URL_SECRET",
+      "headers": {
+        "Authorization": "Bearer CURSOR_HEADER_SECRET"
+      }
+    }
+  }
+}

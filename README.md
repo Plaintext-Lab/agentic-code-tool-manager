@@ -30,6 +30,8 @@ Claude Code configuration is scattered across your filesystem—`~/.claude.json`
 
 ## Features
 
+**Cross-Client Inventory** — See skills, MCP servers, and hooks discovered from Claude, Codex, and Cursor in one read-only view, including effective precedence and Claude managed policy. Source locations, disabled state, and symlink targets remain visible while protected configuration values stay hidden.
+
 **MCP Testing** — Connect to any MCP server and execute its tools directly from the app. Validate your configurations actually work before assigning them to projects.
 
 ![MCP Testing](imgs/mcp-testing-12s.gif)

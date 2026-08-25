@@ -21,3 +21,4 @@ export * from './usage';
 export * from './insights';
 export * from './session';
 export * from './cloudSync';
+export * from './inventory';

@@ -23,6 +23,7 @@ vi.mock('$lib/stores', () => ({
 				'nav.insights': 'Insights',
 				'nav.dashboard': 'Dashboard',
 				'nav.projects': 'Projects',
+				'nav.inventory': 'Inventory',
 				'nav.mcps': 'MCPs',
 				'nav.agents': 'Agents',
 				'nav.skills': 'Skills',
@@ -159,6 +160,11 @@ describe('Sidebar Component', () => {
 	it('should render Tool Manager subtitle', () => {
 		render(Sidebar);
 		expect(screen.getByText('Tool Manager')).toBeInTheDocument();
+	});
+
+	it('should link to the cross-client inventory', () => {
+		render(Sidebar);
+		expect(screen.getByRole('link', { name: 'Inventory' })).toHaveAttribute('href', '/inventory');
 	});
 
 	it('should render navigation groups', () => {
