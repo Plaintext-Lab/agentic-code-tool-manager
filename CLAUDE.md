@@ -24,3 +24,20 @@ Developers of all experience levels who manage Claude Code and other AI coding a
 4. **Dark mode first, light mode supported** — Design in dark mode, ensure light mode works well. The existing gray-900 background with gray-800 cards and blue accents is the foundation.
 
 5. **Accessible by default** — Good contrast ratios, keyboard navigable, semantic HTML. Focus indicators on all interactive elements. No information conveyed by color alone.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub.
+See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default Matt Pocock label vocabulary.
+See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository.
+See `docs/agents/domain.md`.
