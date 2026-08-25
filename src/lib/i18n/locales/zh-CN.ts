@@ -179,6 +179,8 @@ export const zhCN: Translations = {
 	'inventory.trustNotReported': '未报告信任状态',
 	'inventory.projectTrusted': '项目已信任',
 	'inventory.projectNotTrusted': '项目未信任',
+	'inventory.hookTrusted': '钩子已信任',
+	'inventory.hookNotTrusted': '钩子未信任',
 	'inventory.protectedField': '已隐藏 {count} 组受保护字段',
 	'inventory.protectedFields': '已隐藏 {count} 组受保护字段',
 
