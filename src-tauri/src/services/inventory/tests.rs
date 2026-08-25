@@ -147,6 +147,190 @@ fn disabled_codex_skill_is_reported_without_deleting_it() {
 }
 
 #[test]
+fn claude_project_trust_applies_to_project_skills() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let project = fixture.path().join("project");
+    write(
+        &home.join(".claude.json"),
+        &format!(
+            r#"{{"projects":{{"{}":{{"hasTrustDialogAccepted":false}}}}}}"#,
+            project.display()
+        ),
+    );
+    write_skill(&project.join(".claude/skills/untrusted-skill/SKILL.md"));
+
+    let snapshot = discover_inventory(home, vec![project]);
+    let skill = snapshot
+        .records
+        .iter()
+        .find(|record| record.client == ClientKind::Claude && record.name == "shared-skill")
+        .expect("Claude project skill should be discovered");
+
+    assert_eq!(skill.trust_state, TrustState::Untrusted);
+    assert_eq!(skill.is_effective, Some(false));
+}
+
+#[test]
+fn malformed_hook_handlers_are_skipped() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    write(
+        &home.join(".cursor/hooks.json"),
+        r#"{
+            "hooks": {
+                "Stop": [
+                    {},
+                    {"type":"command"},
+                    {"type":"command","command":"valid-command"}
+                ]
+            }
+        }"#,
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+    let hooks: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| {
+            record.client == ClientKind::Cursor && record.item_type == InventoryItemType::Hook
+        })
+        .collect();
+
+    assert_eq!(hooks.len(), 1);
+    assert!(snapshot.warnings.iter().any(|warning| {
+        warning.client == Some(ClientKind::Cursor) && warning.message.contains("no usable payload")
+    }));
+}
+
+#[test]
+fn unclosed_skill_frontmatter_is_not_effective() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    write(
+        &home.join(".agents/skills/folder-name/SKILL.md"),
+        "---\nname: misleading-name\ndescription: missing closing delimiter\n",
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+    let skill = snapshot
+        .records
+        .iter()
+        .find(|record| record.client == ClientKind::Codex && record.name == "folder-name")
+        .expect("malformed skill should remain visible by its folder name");
+
+    assert_eq!(skill.is_effective, Some(false));
+    assert!(snapshot
+        .warnings
+        .iter()
+        .any(|warning| warning.message.contains("frontmatter name")));
+}
+
+#[test]
+fn codex_hook_trust_requires_the_current_handler_hash() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let config_path = home.join(".codex/config.toml");
+    let hooks_path = home.join(".codex/hooks.json");
+    write(
+        &hooks_path,
+        r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {"hooks":[{"type":"command","command":"echo trusted"}]},
+                    {"hooks":[{"type":"command","command":"echo changed"}]}
+                ]
+            }
+        }"#,
+    );
+    write(
+        &config_path,
+        &format!(
+            r#"[hooks.state."{}:pre_tool_use:0:0"]
+trusted_hash = "sha256:620fb822b32c78c73a2c5817199b662d4e82c221d93dd1b85bf843cf8fec7785"
+
+[hooks.state."{}:pre_tool_use:1:0"]
+trusted_hash = "sha256:620fb822b32c78c73a2c5817199b662d4e82c221d93dd1b85bf843cf8fec7785"
+"#,
+            hooks_path.display(),
+            hooks_path.display()
+        ),
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+    let hooks: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| {
+            record.client == ClientKind::Codex && record.item_type == InventoryItemType::Hook
+        })
+        .collect();
+
+    assert_eq!(hooks.len(), 2);
+    assert_eq!(hooks[0].trust_state, TrustState::Trusted);
+    assert_eq!(hooks[0].is_effective, Some(true));
+    assert_eq!(hooks[1].trust_state, TrustState::Untrusted);
+    assert_eq!(hooks[1].is_effective, Some(false));
+}
+
+#[test]
+fn discovers_components_from_configured_codex_plugins() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let marketplace = fixture.path().join("marketplace");
+    let plugin = marketplace.join("plugins/demo");
+    write(
+        &marketplace.join(".agents/plugins/marketplace.json"),
+        r#"{"name":"local","plugins":[{"name":"demo","source":"./plugins/demo"}]}"#,
+    );
+    write(
+        &plugin.join(".codex-plugin/plugin.json"),
+        r#"{
+            "name":"demo",
+            "skills":"./skills/",
+            "mcpServers":"./.mcp.json",
+            "hooks":"./hooks/hooks.json"
+        }"#,
+    );
+    write_skill(&plugin.join("skills/plugin-skill/SKILL.md"));
+    write(
+        &plugin.join(".mcp.json"),
+        r#"{"mcpServers":{"plugin-server":{"command":"plugin-command"}}}"#,
+    );
+    write(
+        &plugin.join("hooks/hooks.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"plugin-hook"}]}]}}"#,
+    );
+    write(
+        &home.join(".codex/config.toml"),
+        &format!(
+            r#"[marketplaces.local]
+source_type = "local"
+source = "{}"
+
+[plugins."demo@local"]
+enabled = true
+"#,
+            marketplace.display()
+        ),
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+
+    for (name, item_type) in [
+        ("shared-skill", InventoryItemType::Skill),
+        ("plugin-server", InventoryItemType::Mcp),
+        ("Stop hook", InventoryItemType::Hook),
+    ] {
+        assert!(snapshot.records.iter().any(|record| {
+            record.client == ClientKind::Codex
+                && record.name == name
+                && record.item_type == item_type
+        }));
+    }
+}
+
+#[test]
 fn preserves_same_named_claude_servers_from_multiple_projects() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");
@@ -412,12 +596,19 @@ fn codex_project_trust_controls_effectiveness() {
     let home = fixture.path().join("home");
     let trusted_project = fixture.path().join("trusted-project");
     let untrusted_project = fixture.path().join("untrusted-project");
+    let canonical_fixture = fs::canonicalize(fixture.path()).unwrap();
     write(
         &home.join(".codex/config.toml"),
         &format!(
-            "[projects.'{}']\ntrust_level = 'trusted'\n\n[projects.'{}']\ntrust_level = 'untrusted'\n",
+            "[projects.'{}']\ntrust_level = 'trusted'\n\n[projects.'{}']\ntrust_level = 'untrusted'\n\n[hooks.state.'{}:stop:0:0']\ntrusted_hash = 'sha256:0ce4021f58cfb1de2385dbe69ddcb635e9f4da01a9c8e32964b212c20cf81126'\n\n[hooks.state.'{}:stop:0:0']\ntrusted_hash = 'sha256:8226a59c81798974e69fa3bfc6fd11bfed8073bb1399d6588b6728d88765e0e9'\n",
             trusted_project.display(),
-            untrusted_project.display()
+            untrusted_project.display(),
+            canonical_fixture
+                .join("trusted-project/.codex/config.toml")
+                .display(),
+            canonical_fixture
+                .join("untrusted-project/.codex/config.toml")
+                .display()
         ),
     );
     write(
@@ -498,6 +689,13 @@ fn duplicate_codex_skills_report_contextual_precedence() {
     write_skill(&home.join(".agents/skills/shared-skill/SKILL.md"));
     write_skill(&project.join(".agents/skills/shared-skill/SKILL.md"));
     write_skill(&project.join(".codex/skills/shared-skill/SKILL.md"));
+    write(
+        &home.join(".codex/config.toml"),
+        &format!(
+            "[projects.'{}']\ntrust_level = 'trusted'\n",
+            project.display()
+        ),
+    );
 
     let snapshot = discover_inventory(home, vec![project]);
     let skills: Vec<_> = snapshot

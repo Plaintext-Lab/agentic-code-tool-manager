@@ -149,6 +149,8 @@ export const zhTW: Translations = {
 	'inventory.sourceProjectSkills': '專案技能',
 	'inventory.sourceAdminSkills': '管理員技能',
 	'inventory.sourceLegacySkills': '舊版技能',
+	'inventory.sourcePluginConfig': '外掛設定',
+	'inventory.sourcePluginSkills': '外掛技能',
 	'inventory.statusNotReported': '未回報狀態',
 	'inventory.statusDisabled': '已停用',
 	'inventory.statusNotEffective': '未生效',

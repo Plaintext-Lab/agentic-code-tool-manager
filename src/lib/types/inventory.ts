@@ -9,7 +9,9 @@ export type InventorySourceKind =
 	| 'userSkills'
 	| 'projectSkills'
 	| 'adminSkills'
-	| 'legacySkills';
+	| 'legacySkills'
+	| 'pluginConfig'
+	| 'pluginSkills';
 export type InventoryTrustState = 'notApplicable' | 'unknown' | 'trusted' | 'untrusted';
 
 export interface AdapterCapabilities {

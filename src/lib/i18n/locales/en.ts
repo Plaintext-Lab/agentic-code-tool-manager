@@ -147,6 +147,8 @@ export const en = {
 	'inventory.sourceProjectSkills': 'Project skills',
 	'inventory.sourceAdminSkills': 'Admin skills',
 	'inventory.sourceLegacySkills': 'Legacy skills',
+	'inventory.sourcePluginConfig': 'Plugin config',
+	'inventory.sourcePluginSkills': 'Plugin skills',
 	'inventory.statusNotReported': 'Status not reported',
 	'inventory.statusDisabled': 'Disabled',
 	'inventory.statusNotEffective': 'Not effective',

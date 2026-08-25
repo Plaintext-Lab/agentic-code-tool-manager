@@ -69,6 +69,8 @@ pub enum SourceKind {
     ProjectSkills,
     AdminSkills,
     LegacySkills,
+    PluginConfig,
+    PluginSkills,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]

@@ -42,6 +42,8 @@ impl CursorAdapter {
                 None,
                 source_priority,
                 true,
+                true,
+                TrustState::NotApplicable,
                 &disabled,
                 snapshot,
             );
@@ -63,6 +65,8 @@ impl CursorAdapter {
                         Some(project_root),
                         source_priority,
                         true,
+                        true,
+                        TrustState::Unknown,
                         &disabled,
                         snapshot,
                     );

@@ -1,9 +1,10 @@
 use super::config::{push_toml_mcps, read_json, read_toml};
-use super::hooks::{push_json_hooks, push_toml_hooks};
+use super::hooks::{push_codex_json_hooks, push_toml_hooks};
 use super::models::{
     AdapterCapabilities, ClientKind, DiscoveryContext, InventoryScope, InventorySnapshot,
     SourceKind, TrustState,
 };
+use super::plugins::discover_codex_plugins;
 use super::skills::{codex_disabled_skill_paths, discover_project_skill_roots, scan_skill_root};
 use super::ClientAdapter;
 use std::path::Path;
@@ -19,7 +20,7 @@ impl ClientAdapter for CodexAdapter {
         let global_config_path = context.codex_home.join("config.toml");
         let global_config = read_toml(&global_config_path, ClientKind::Codex, snapshot);
         let disabled_skills = codex_disabled_skill_paths(global_config.as_ref());
-        self.discover_skills(context, &disabled_skills, snapshot);
+        self.discover_skills(context, global_config.as_ref(), &disabled_skills, snapshot);
 
         let global_hooks_enabled = hooks_enabled(global_config.as_ref(), true);
         if let Some(config) = global_config.as_ref() {
@@ -37,13 +38,13 @@ impl ClientAdapter for CodexAdapter {
             push_toml_hooks(
                 config,
                 &global_config_path,
-                ClientKind::Codex,
                 InventoryScope::User,
                 SourceKind::UserConfig,
                 None,
                 100,
                 global_hooks_enabled,
                 TrustState::NotApplicable,
+                global_config.as_ref(),
                 snapshot,
             );
         }
@@ -55,6 +56,14 @@ impl ClientAdapter for CodexAdapter {
             100,
             global_hooks_enabled,
             TrustState::NotApplicable,
+            global_config.as_ref(),
+            snapshot,
+        );
+        discover_codex_plugins(
+            context,
+            global_config.as_ref(),
+            &disabled_skills,
+            global_hooks_enabled,
             snapshot,
         );
         self.discover_project_configs(
@@ -70,6 +79,7 @@ impl CodexAdapter {
     fn discover_skills(
         &self,
         context: &DiscoveryContext,
+        global_config: Option<&toml::Value>,
         disabled_skills: &std::collections::HashSet<String>,
         snapshot: &mut InventorySnapshot,
     ) {
@@ -81,6 +91,8 @@ impl CodexAdapter {
             None,
             100,
             true,
+            true,
+            TrustState::NotApplicable,
             disabled_skills,
             snapshot,
         );
@@ -92,6 +104,8 @@ impl CodexAdapter {
             None,
             50,
             true,
+            true,
+            TrustState::NotApplicable,
             disabled_skills,
             snapshot,
         );
@@ -103,10 +117,13 @@ impl CodexAdapter {
             None,
             300,
             true,
+            true,
+            TrustState::NotApplicable,
             disabled_skills,
             snapshot,
         );
         for project_root in &context.project_roots {
+            let trust_state = project_trust_state(global_config, project_root);
             for skills_root in discover_project_skill_roots(project_root, &[".agents"]) {
                 scan_skill_root(
                     &skills_root,
@@ -116,6 +133,8 @@ impl CodexAdapter {
                     Some(project_root),
                     200,
                     true,
+                    true,
+                    trust_state,
                     disabled_skills,
                     snapshot,
                 );
@@ -129,6 +148,8 @@ impl CodexAdapter {
                     Some(project_root),
                     50,
                     true,
+                    true,
+                    trust_state,
                     disabled_skills,
                     snapshot,
                 );
@@ -163,13 +184,13 @@ impl CodexAdapter {
                 push_toml_hooks(
                     config,
                     &config_path,
-                    ClientKind::Codex,
                     InventoryScope::Project,
                     SourceKind::ProjectConfig,
                     Some(project_root),
                     200,
                     project_hooks_enabled,
                     trust_state,
+                    global_config,
                     snapshot,
                 );
             }
@@ -181,6 +202,7 @@ impl CodexAdapter {
                 200,
                 project_hooks_enabled,
                 trust_state,
+                global_config,
                 snapshot,
             );
         }
@@ -196,21 +218,23 @@ impl CodexAdapter {
         source_priority: u16,
         enabled: bool,
         trust_state: TrustState,
+        state_config: Option<&toml::Value>,
         snapshot: &mut InventorySnapshot,
     ) {
         let Some(config) = read_json(hooks_path, ClientKind::Codex, snapshot) else {
             return;
         };
-        push_json_hooks(
+        push_codex_json_hooks(
             &config,
             hooks_path,
-            ClientKind::Codex,
             scope,
             source_kind,
             project_path,
             source_priority,
             enabled,
             trust_state,
+            state_config,
+            &hooks_path.display().to_string(),
             snapshot,
         );
     }

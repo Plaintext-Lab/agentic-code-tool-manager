@@ -1,7 +1,7 @@
 use super::config::paths_differ;
 use super::models::{
-    ClientKind, InventoryItemType, InventoryRecord, InventoryScope, InventorySnapshot,
-    InventoryWarning, SourceKind, TrustState,
+    effective_state, ClientKind, InventoryItemType, InventoryRecord, InventoryScope,
+    InventorySnapshot, InventoryWarning, SourceKind, TrustState,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,8 @@ pub fn scan_skill_root(
     project_path: Option<&Path>,
     source_priority: u16,
     require_frontmatter_name: bool,
+    source_enabled: bool,
+    trust_state: TrustState,
     disabled_paths: &HashSet<String>,
     snapshot: &mut InventorySnapshot,
 ) {
@@ -129,8 +131,9 @@ pub fn scan_skill_root(
             }
         };
         let resolved_path = resolved.display().to_string();
-        let enabled =
-            !disabled_paths.contains(&original_path) && !disabled_paths.contains(&resolved_path);
+        let enabled = source_enabled
+            && !disabled_paths.contains(&original_path)
+            && !disabled_paths.contains(&resolved_path);
         let mut record = InventoryRecord::new(
             client,
             InventoryItemType::Skill,
@@ -146,8 +149,8 @@ pub fn scan_skill_root(
         record.resolved_path = Some(resolved_path.clone());
         record.is_symlink = paths_differ(skill_file, &resolved);
         record.enabled = Some(enabled);
-        record.trust_state = TrustState::NotApplicable;
-        record.is_effective = Some(enabled && has_required_name);
+        record.trust_state = trust_state;
+        record.is_effective = effective_state(enabled && has_required_name, trust_state);
         snapshot.records.push(record);
         ordinal += 1;
     }
@@ -200,17 +203,18 @@ fn parse_frontmatter_name(content: &str) -> Option<String> {
     if lines.next()?.trim() != "---" {
         return None;
     }
+    let mut name = None;
     for line in lines {
         let line = line.trim();
         if line == "---" {
-            break;
+            return name;
         }
         let Some(value) = line.strip_prefix("name:") else {
             continue;
         };
         let value = value.trim().trim_matches(['\'', '"']);
         if !value.is_empty() {
-            return Some(value.to_string());
+            name = Some(value.to_string());
         }
     }
     None
@@ -253,5 +257,10 @@ mod tests {
     #[test]
     fn ignores_name_outside_frontmatter() {
         assert_eq!(parse_frontmatter_name("# Skill\nname: unsafe"), None);
+    }
+
+    #[test]
+    fn rejects_unclosed_frontmatter() {
+        assert_eq!(parse_frontmatter_name("---\nname: unsafe\nBody"), None);
     }
 }

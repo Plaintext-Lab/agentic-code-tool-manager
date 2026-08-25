@@ -5,6 +5,7 @@ mod config;
 mod cursor;
 mod hooks;
 mod models;
+mod plugins;
 mod skills;
 
 pub use models::InventorySnapshot;

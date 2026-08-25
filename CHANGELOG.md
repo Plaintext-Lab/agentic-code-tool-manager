@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Cross-Client Inventory**: Added a read-only inventory of skills, MCP servers, and hooks discovered from Claude, Codex, and Cursor user and registered-project locations. The inventory shows provenance, disabled state, symlink targets, and source warnings without displaying MCP commands, headers, environment values, or hook contents. (#2)
+- **Cross-Client Inventory**: Added a read-only inventory of skills, MCP servers, and hooks discovered from Claude, Codex, and Cursor user, registered-project, and enabled Codex plugin locations. The inventory shows provenance, disabled and trusted state, symlink targets, and safe source warnings without displaying MCP commands, headers, environment values, or hook contents. (#2)
 
 ### Fixed
 - **Cross-Client Effective Status**: Inventory status now respects duplicate skill precedence, Claude project and managed policy, Codex trust and hook settings, and Windows path normalization. Inventory labels are translated in all supported languages. (#2)

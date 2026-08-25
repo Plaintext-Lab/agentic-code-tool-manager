@@ -33,7 +33,9 @@ impl ClientAdapter for ClaudeAdapter {
             managed_settings.as_ref(),
             context.claude_managed_mcp_path.exists(),
         );
-        self.discover_skills(context, snapshot);
+        let claude_json_path = context.home_dir.join(".claude.json");
+        let user_state = read_json(&claude_json_path, ClientKind::Claude, snapshot);
+        self.discover_skills(context, user_state.as_ref(), snapshot);
         self.discover_managed_state(
             context,
             managed_settings.as_ref(),
@@ -41,7 +43,13 @@ impl ClientAdapter for ClaudeAdapter {
             &policy,
             snapshot,
         );
-        let (user_state, user_hooks_enabled) = self.discover_user_state(context, &policy, snapshot);
+        let user_hooks_enabled = self.discover_user_state(
+            context,
+            &claude_json_path,
+            user_state.as_ref(),
+            &policy,
+            snapshot,
+        );
         self.discover_project_configs(
             context,
             user_state.as_ref(),
@@ -63,7 +71,12 @@ impl ClientAdapter for ClaudeAdapter {
 }
 
 impl ClaudeAdapter {
-    fn discover_skills(&self, context: &DiscoveryContext, snapshot: &mut InventorySnapshot) {
+    fn discover_skills(
+        &self,
+        context: &DiscoveryContext,
+        user_state: Option<&Value>,
+        snapshot: &mut InventorySnapshot,
+    ) {
         let disabled = HashSet::new();
         scan_skill_root(
             &context.home_dir.join(".claude/skills"),
@@ -73,10 +86,15 @@ impl ClaudeAdapter {
             None,
             200,
             false,
+            true,
+            TrustState::NotApplicable,
             &disabled,
             snapshot,
         );
         for project_root in &context.project_roots {
+            let trust_state = find_project_state(user_state, project_root)
+                .map(project_trust_state)
+                .unwrap_or(TrustState::Unknown);
             for skills_root in discover_project_skill_roots(project_root, &[".claude"]) {
                 scan_skill_root(
                     &skills_root,
@@ -86,6 +104,8 @@ impl ClaudeAdapter {
                     Some(project_root),
                     100,
                     false,
+                    true,
+                    trust_state,
                     &disabled,
                     snapshot,
                 );
@@ -96,17 +116,17 @@ impl ClaudeAdapter {
     fn discover_user_state(
         &self,
         context: &DiscoveryContext,
+        claude_json_path: &Path,
+        config: Option<&Value>,
         policy: &ClaudeManagedPolicy,
         snapshot: &mut InventorySnapshot,
-    ) -> (Option<Value>, bool) {
-        let claude_json_path = context.home_dir.join(".claude.json");
-        let config = read_json(&claude_json_path, ClientKind::Claude, snapshot);
-        if let Some(config) = config.as_ref() {
+    ) -> bool {
+        if let Some(config) = config {
             if let Some(servers) = config.get("mcpServers").and_then(Value::as_object) {
                 let policy_blocked = policy.blocked_names(servers);
                 push_json_mcps(
                     servers,
-                    &claude_json_path,
+                    claude_json_path,
                     ClientKind::Claude,
                     InventoryScope::User,
                     SourceKind::UserConfig,
@@ -119,7 +139,7 @@ impl ClaudeAdapter {
                     snapshot,
                 );
             }
-            self.discover_local_mcps(config, &claude_json_path, context, policy, snapshot);
+            self.discover_local_mcps(config, claude_json_path, context, policy, snapshot);
         }
 
         let settings_path = context.home_dir.join(".claude/settings.json");
@@ -143,7 +163,7 @@ impl ClaudeAdapter {
                 snapshot,
             );
         }
-        (config, hooks_enabled)
+        hooks_enabled
     }
 
     fn discover_local_mcps(

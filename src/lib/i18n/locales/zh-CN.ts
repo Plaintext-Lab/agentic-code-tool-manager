@@ -154,6 +154,8 @@ export const zhCN: Translations = {
 	'inventory.sourceProjectSkills': '项目技能',
 	'inventory.sourceAdminSkills': '管理员技能',
 	'inventory.sourceLegacySkills': '旧版技能',
+	'inventory.sourcePluginConfig': '插件配置',
+	'inventory.sourcePluginSkills': '插件技能',
 	'inventory.statusNotReported': '未报告状态',
 	'inventory.statusDisabled': '已禁用',
 	'inventory.statusNotEffective': '未生效',

@@ -37,7 +37,9 @@
 		userSkills: 'inventory.sourceUserSkills',
 		projectSkills: 'inventory.sourceProjectSkills',
 		adminSkills: 'inventory.sourceAdminSkills',
-		legacySkills: 'inventory.sourceLegacySkills'
+		legacySkills: 'inventory.sourceLegacySkills',
+		pluginConfig: 'inventory.sourcePluginConfig',
+		pluginSkills: 'inventory.sourcePluginSkills'
 	};
 
 	function statusLabel(record: InventoryRecord): string {
