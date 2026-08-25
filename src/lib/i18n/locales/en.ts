@@ -172,6 +172,8 @@ export const en = {
 	'inventory.trustNotReported': 'Trust not reported',
 	'inventory.projectTrusted': 'Project trusted',
 	'inventory.projectNotTrusted': 'Project not trusted',
+	'inventory.hookTrusted': 'Hook trusted',
+	'inventory.hookNotTrusted': 'Hook not trusted',
 	'inventory.protectedField': '{count} protected field group hidden',
 	'inventory.protectedFields': '{count} protected field groups hidden',
 

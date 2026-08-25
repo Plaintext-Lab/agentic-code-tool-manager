@@ -174,6 +174,8 @@ export const zhTW: Translations = {
 	'inventory.trustNotReported': '未回報信任狀態',
 	'inventory.projectTrusted': '專案已信任',
 	'inventory.projectNotTrusted': '專案未信任',
+	'inventory.hookTrusted': '鉤子已信任',
+	'inventory.hookNotTrusted': '鉤子未信任',
 	'inventory.protectedField': '已隱藏 {count} 組受保護欄位',
 	'inventory.protectedFields': '已隱藏 {count} 組受保護欄位',
 
