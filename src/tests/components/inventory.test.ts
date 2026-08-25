@@ -57,7 +57,7 @@ describe('InventoryTable', () => {
 		expect(screen.getByText('Not effective')).toBeInTheDocument();
 	});
 
-	it('labels hook trust separately from project trust', () => {
+	it('labels non-project Codex hook trust separately from project trust', () => {
 		render(InventoryTable, {
 			props: {
 				records: [
