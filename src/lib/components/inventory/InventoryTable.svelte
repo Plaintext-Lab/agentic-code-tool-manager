@@ -66,7 +66,7 @@
 	}
 
 	function trustLabel(record: InventoryRecord, trusted: boolean): string {
-		if (record.itemType === 'hook' && record.scope !== 'project') {
+		if (record.client === 'codex' && record.itemType === 'hook' && record.scope !== 'project') {
 			return i18n.t(trusted ? 'inventory.hookTrusted' : 'inventory.hookNotTrusted');
 		}
 		return i18n.t(trusted ? 'inventory.projectTrusted' : 'inventory.projectNotTrusted');

@@ -63,6 +63,7 @@ describe('InventoryTable', () => {
 				records: [
 					{ ...baseRecord, id: 'codex:hook:trusted', name: 'trusted-user-hook', itemType: 'hook', trustState: 'trusted' },
 					{ ...baseRecord, id: 'codex:hook:untrusted', name: 'untrusted-plugin-hook', itemType: 'hook', sourceKind: 'pluginConfig', trustState: 'untrusted', isEffective: false },
+					{ ...baseRecord, id: 'claude:hook:trusted', name: 'trusted-claude-hook', client: 'claude', itemType: 'hook', trustState: 'trusted' },
 					{ ...baseRecord, id: 'claude:mcp:project', name: 'untrusted-project-mcp', client: 'claude', scope: 'project', trustState: 'untrusted', isEffective: false }
 				]
 			}
@@ -70,13 +71,16 @@ describe('InventoryTable', () => {
 
 		const trustedHookRow = screen.getByText('trusted-user-hook').closest('tr');
 		const untrustedHookRow = screen.getByText('untrusted-plugin-hook').closest('tr');
+		const claudeHookRow = screen.getByText('trusted-claude-hook').closest('tr');
 		const projectRow = screen.getByText('untrusted-project-mcp').closest('tr');
 
 		expect(trustedHookRow).not.toBeNull();
 		expect(untrustedHookRow).not.toBeNull();
+		expect(claudeHookRow).not.toBeNull();
 		expect(projectRow).not.toBeNull();
 		expect(within(trustedHookRow!).getByText('Hook trusted')).toBeInTheDocument();
 		expect(within(untrustedHookRow!).getByText('Hook not trusted')).toBeInTheDocument();
+		expect(within(claudeHookRow!).getByText('Project trusted')).toBeInTheDocument();
 		expect(within(projectRow!).getByText('Project not trusted')).toBeInTheDocument();
 	});
 
