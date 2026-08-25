@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Agent Workflow Configuration**: Added repository-local guidance for GitHub issue tracking, triage labels, and domain documentation used by engineering skills.
 - **Cross-Client Inventory**: Added a read-only inventory of skills, MCP servers, and hooks discovered from Claude, Codex, and Cursor user, registered-project, and enabled Codex plugin locations. The inventory shows provenance, disabled and trusted state, symlink targets, and safe source warnings without displaying MCP commands, headers, environment values, or hook contents. (#2)
 
 ### Fixed
