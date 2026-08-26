@@ -21,7 +21,14 @@ const baseRecord: InventoryRecord = {
 	isEffective: true,
 	sourcePriority: 100,
 	protectedFields: ['Environment variables', 'HTTP headers'],
-	detail: 'STDIO MCP server'
+	detail: 'STDIO MCP server',
+	actionCapabilities: {
+		enable: { available: false, blockedReason: 'alreadyEnabled' },
+		disable: { available: true, blockedReason: null },
+		confirmationRequired: true,
+		reloadGuidance: 'restartClient',
+		sourceRevision: 'sha256:safe-fixture-revision'
+	}
 };
 
 describe('InventoryTable', () => {
@@ -101,6 +108,74 @@ describe('InventoryTable', () => {
 			expect(screen.getByRole('columnheader', { name: '工具' })).toBeInTheDocument();
 			expect(screen.getByText('用户配置')).toBeInTheDocument();
 			expect(screen.getByText('已启用')).toBeInTheDocument();
+		} finally {
+			i18n.setLocale('en');
+		}
+	});
+
+	it('explains why records are read-only without showing protected configuration', () => {
+		render(InventoryTable, {
+			props: {
+				records: [
+					{
+						...baseRecord,
+						id: 'claude:mcp:managed',
+						client: 'claude',
+						name: 'managed-tool',
+						actionCapabilities: {
+							enable: { available: false, blockedReason: 'managedSource' },
+							disable: { available: false, blockedReason: 'managedSource' },
+							confirmationRequired: false,
+							reloadGuidance: 'notRequired',
+							sourceRevision: 'sha256:does-not-reveal-managed-secret'
+						}
+					},
+					{
+						...baseRecord,
+						id: 'cursor:mcp:unsupported',
+						client: 'cursor',
+						name: 'cursor-tool',
+						actionCapabilities: {
+							enable: { available: false, blockedReason: 'unsupportedByClient' },
+							disable: { available: false, blockedReason: 'unsupportedByClient' },
+							confirmationRequired: false,
+							reloadGuidance: 'notRequired',
+							sourceRevision: 'sha256:does-not-reveal-cursor-secret'
+						}
+					}
+				]
+			}
+		});
+
+		expect(screen.getByText('Managed settings cannot be changed here.')).toBeInTheDocument();
+		expect(screen.getByText('Cursor does not document a safe per-item control.')).toBeInTheDocument();
+		expect(document.body.textContent).not.toContain('does-not-reveal-managed-secret');
+		expect(document.body.textContent).not.toContain('does-not-reveal-cursor-secret');
+	});
+
+	it.each([
+		['zh-CN', '托管设置无法在此处更改。'],
+		['zh-TW', '受管理設定無法在此處變更。']
+	] as const)('translates blocked explanations in %s', (locale, explanation) => {
+		i18n.setLocale(locale);
+		try {
+			render(InventoryTable, {
+				props: {
+					records: [
+						{
+							...baseRecord,
+							actionCapabilities: {
+								enable: { available: false, blockedReason: 'managedSource' },
+								disable: { available: false, blockedReason: 'managedSource' },
+								confirmationRequired: false,
+								reloadGuidance: 'notRequired',
+								sourceRevision: 'sha256:safe-fixture-revision'
+							}
+						}
+					]
+				}
+			});
+			expect(screen.getByText(explanation)).toBeInTheDocument();
 		} finally {
 			i18n.setLocale('en');
 		}

@@ -82,6 +82,102 @@ pub enum TrustState {
     Untrusted,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionBlockedReason {
+    AlreadyEnabled,
+    AlreadyDisabled,
+    StateUnavailable,
+    ManagedSource,
+    AdministratorSource,
+    PolicyControlled,
+    PluginOwnedSource,
+    MalformedSource,
+    BrokenSymlink,
+    UnsupportedByClient,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReloadGuidance {
+    NotRequired,
+    RestartClient,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionAvailability {
+    pub available: bool,
+    pub blocked_reason: Option<ActionBlockedReason>,
+}
+
+impl ActionAvailability {
+    fn available() -> Self {
+        Self {
+            available: true,
+            blocked_reason: None,
+        }
+    }
+
+    fn blocked(reason: ActionBlockedReason) -> Self {
+        Self {
+            available: false,
+            blocked_reason: Some(reason),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryActionCapabilities {
+    pub enable: ActionAvailability,
+    pub disable: ActionAvailability,
+    pub confirmation_required: bool,
+    pub reload_guidance: ReloadGuidance,
+    pub source_revision: Option<String>,
+}
+
+impl InventoryActionCapabilities {
+    pub fn stateful(enabled: Option<bool>, source_revision: Option<String>) -> Self {
+        let (enable, disable) = match enabled {
+            Some(true) => (
+                ActionAvailability::blocked(ActionBlockedReason::AlreadyEnabled),
+                ActionAvailability::available(),
+            ),
+            Some(false) => (
+                ActionAvailability::available(),
+                ActionAvailability::blocked(ActionBlockedReason::AlreadyDisabled),
+            ),
+            None => (
+                ActionAvailability::blocked(ActionBlockedReason::StateUnavailable),
+                ActionAvailability::blocked(ActionBlockedReason::StateUnavailable),
+            ),
+        };
+        let confirmation_required = enable.available || disable.available;
+        Self {
+            enable,
+            disable,
+            confirmation_required,
+            reload_guidance: if confirmation_required {
+                ReloadGuidance::RestartClient
+            } else {
+                ReloadGuidance::NotRequired
+            },
+            source_revision,
+        }
+    }
+
+    pub fn blocked(reason: ActionBlockedReason, source_revision: Option<String>) -> Self {
+        Self {
+            enable: ActionAvailability::blocked(reason),
+            disable: ActionAvailability::blocked(reason),
+            confirmation_required: false,
+            reload_guidance: ReloadGuidance::NotRequired,
+            source_revision,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdapterCapabilities {
@@ -122,6 +218,7 @@ pub struct InventoryRecord {
     pub source_priority: u16,
     pub protected_fields: Vec<String>,
     pub detail: Option<String>,
+    pub action_capabilities: InventoryActionCapabilities,
 }
 
 impl InventoryRecord {
@@ -166,8 +263,38 @@ impl InventoryRecord {
             source_priority,
             protected_fields: Vec::new(),
             detail: None,
+            action_capabilities: InventoryActionCapabilities::blocked(
+                ActionBlockedReason::UnsupportedByClient,
+                None,
+            ),
         }
     }
+}
+
+pub fn source_action_blocker(record: &InventoryRecord) -> Option<ActionBlockedReason> {
+    if record.source_kind == SourceKind::ManagedConfig {
+        return Some(ActionBlockedReason::ManagedSource);
+    }
+    if record.scope == InventoryScope::Admin || record.source_kind == SourceKind::AdminSkills {
+        return Some(ActionBlockedReason::AdministratorSource);
+    }
+    if matches!(
+        record.source_kind,
+        SourceKind::PluginConfig | SourceKind::PluginSkills
+    ) {
+        return Some(ActionBlockedReason::PluginOwnedSource);
+    }
+    if record.is_symlink && record.resolved_path.is_none() {
+        return Some(ActionBlockedReason::BrokenSymlink);
+    }
+    if record.item_type == InventoryItemType::Skill
+        && record.enabled == Some(true)
+        && record.is_effective == Some(false)
+        && record.trust_state != TrustState::Untrusted
+    {
+        return Some(ActionBlockedReason::MalformedSource);
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -1,7 +1,11 @@
-use super::models::{ClientKind, InventoryItemType, SourceKind, TrustState};
+use super::codex::CodexAdapter;
+use super::models::{
+    ActionBlockedReason, ClientKind, InventoryItemType, InventoryRecord, InventoryScope,
+    ReloadGuidance, SourceKind, TrustState,
+};
 use super::{
     codex_home_path, discover_inventory, discover_inventory_with_codex_home,
-    discover_inventory_with_paths,
+    discover_inventory_with_paths, ClientAdapter,
 };
 use std::fs;
 use std::path::Path;
@@ -92,6 +96,230 @@ fn discovers_all_clients_and_never_serializes_secret_values() {
             "serialized secret value: {secret}"
         );
     }
+}
+
+#[test]
+fn reports_normalized_action_capabilities_for_each_client_boundary() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let managed_settings = fixture.path().join("managed-settings-missing.json");
+    let managed_mcp = fixture.path().join("managed-mcp.json");
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers":{"claude-server":{"command":"claude-secret-command"}}}"#,
+    );
+    write(
+        &home.join(".codex/config.toml"),
+        "[mcp_servers.codex-server]\ncommand = 'codex-secret-command'\n",
+    );
+    write(
+        &home.join(".cursor/mcp.json"),
+        r#"{"mcpServers":{"cursor-server":{"command":"cursor-secret-command"}}}"#,
+    );
+    write(
+        &managed_mcp,
+        r#"{"mcpServers":{"managed-server":{"command":"managed-secret-command"}}}"#,
+    );
+
+    let snapshot = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings.clone(),
+        fixture.path().join("managed-mcp-missing.json"),
+        Vec::new(),
+    );
+    let record = |name: &str| {
+        snapshot
+            .records
+            .iter()
+            .find(|record| record.name == name)
+            .expect("fixture record should be discovered")
+    };
+
+    for name in ["claude-server", "codex-server"] {
+        let actions = &record(name).action_capabilities;
+        assert!(!actions.enable.available);
+        assert_eq!(
+            actions.enable.blocked_reason,
+            Some(ActionBlockedReason::AlreadyEnabled)
+        );
+        assert!(actions.disable.available);
+        assert_eq!(actions.disable.blocked_reason, None);
+        assert!(actions.confirmation_required);
+        assert_eq!(actions.reload_guidance, ReloadGuidance::RestartClient);
+        assert!(actions
+            .source_revision
+            .as_deref()
+            .is_some_and(|revision| revision.starts_with("sha256:")));
+    }
+    let first_codex_revision = record("codex-server")
+        .action_capabilities
+        .source_revision
+        .clone();
+    write(
+        &home.join(".codex/config.toml"),
+        "[mcp_servers.codex-server]\ncommand = 'changed-codex-command'\n",
+    );
+    let changed_snapshot = discover_inventory(home.clone(), Vec::new());
+    let changed_codex_revision = changed_snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "codex-server")
+        .expect("changed Codex fixture should be discovered")
+        .action_capabilities
+        .source_revision
+        .clone();
+    assert_ne!(first_codex_revision, changed_codex_revision);
+
+    let cursor_actions = &record("cursor-server").action_capabilities;
+    assert!(!cursor_actions.enable.available);
+    assert!(!cursor_actions.disable.available);
+    assert_eq!(
+        cursor_actions.enable.blocked_reason,
+        Some(ActionBlockedReason::UnsupportedByClient)
+    );
+    assert_eq!(
+        cursor_actions.disable.blocked_reason,
+        Some(ActionBlockedReason::UnsupportedByClient)
+    );
+
+    let managed_snapshot = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings,
+        managed_mcp,
+        Vec::new(),
+    );
+    let managed_actions = &managed_snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "managed-server")
+        .expect("managed fixture record should be discovered")
+        .action_capabilities;
+    assert!(!managed_actions.enable.available);
+    assert!(!managed_actions.disable.available);
+    assert_eq!(
+        managed_actions.enable.blocked_reason,
+        Some(ActionBlockedReason::ManagedSource)
+    );
+    let policy_controlled = managed_snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "claude-server")
+        .expect("managed policy should leave the user record visible");
+    assert_eq!(
+        policy_controlled.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::PolicyControlled)
+    );
+
+    let serialized = format!(
+        "{}{}",
+        serde_json::to_string(&snapshot).unwrap(),
+        serde_json::to_string(&managed_snapshot).unwrap()
+    );
+    for protected_value in [
+        "claude-secret-command",
+        "codex-secret-command",
+        "cursor-secret-command",
+        "managed-secret-command",
+        "changed-codex-command",
+    ] {
+        assert!(!serialized.contains(protected_value));
+    }
+}
+
+#[test]
+fn codex_boundary_blocks_administrator_and_broken_link_sources() {
+    let mut administrator = InventoryRecord::new(
+        ClientKind::Codex,
+        InventoryItemType::Skill,
+        "administrator-skill".to_string(),
+        InventoryScope::Admin,
+        SourceKind::AdminSkills,
+        "/etc/codex/skills/administrator-skill/SKILL.md".to_string(),
+        None,
+        0,
+        300,
+    );
+    administrator.enabled = Some(true);
+    administrator.is_effective = Some(true);
+    let administrator_actions = CodexAdapter.action_capabilities(
+        &administrator,
+        Some("sha256:administrator-fixture".to_string()),
+    );
+    assert_eq!(
+        administrator_actions.disable.blocked_reason,
+        Some(ActionBlockedReason::AdministratorSource)
+    );
+
+    let mut broken_link = InventoryRecord::new(
+        ClientKind::Codex,
+        InventoryItemType::Skill,
+        "broken-link".to_string(),
+        InventoryScope::User,
+        SourceKind::UserSkills,
+        "/tmp/broken-link/SKILL.md".to_string(),
+        None,
+        0,
+        100,
+    );
+    broken_link.enabled = Some(true);
+    broken_link.is_effective = Some(true);
+    broken_link.is_symlink = true;
+    let broken_link_actions = CodexAdapter.action_capabilities(&broken_link, None);
+    assert_eq!(
+        broken_link_actions.disable.blocked_reason,
+        Some(ActionBlockedReason::BrokenSymlink)
+    );
+}
+
+#[test]
+fn reports_malformed_and_plugin_owned_records_as_read_only() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let marketplace = fixture.path().join("marketplace");
+    let plugin = marketplace.join("plugins/demo");
+    write(
+        &home.join(".agents/skills/malformed/SKILL.md"),
+        "---\nname: malformed\ndescription: missing delimiter\n",
+    );
+    write(
+        &marketplace.join(".agents/plugins/marketplace.json"),
+        r#"{"name":"local","plugins":[{"name":"demo","source":"./plugins/demo"}]}"#,
+    );
+    write(
+        &plugin.join(".codex-plugin/plugin.json"),
+        r#"{"name":"demo","skills":"./skills/"}"#,
+    );
+    write_skill(&plugin.join("skills/plugin-skill/SKILL.md"));
+    write(
+        &home.join(".codex/config.toml"),
+        &format!(
+            "[marketplaces.local]\nsource_type = 'local'\nsource = '{}'\n\n[plugins.'demo@local']\nenabled = true\n",
+            marketplace.display()
+        ),
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+    let malformed = snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "malformed")
+        .expect("malformed skill should remain visible");
+    let plugin_skill = snapshot
+        .records
+        .iter()
+        .find(|record| record.source_kind == SourceKind::PluginSkills)
+        .expect("plugin skill should be discovered");
+
+    assert_eq!(
+        malformed.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+    assert_eq!(
+        plugin_skill.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::PluginOwnedSource)
+    );
 }
 
 #[test]

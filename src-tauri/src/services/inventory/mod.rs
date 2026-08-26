@@ -13,14 +13,23 @@ pub use models::InventorySnapshot;
 use claude::ClaudeAdapter;
 use codex::CodexAdapter;
 use cursor::CursorAdapter;
-use models::{AdapterCapabilities, DiscoveryContext, InventoryWarning};
-use std::collections::HashSet;
+use models::{
+    AdapterCapabilities, DiscoveryContext, InventoryActionCapabilities, InventoryRecord,
+    InventoryWarning,
+};
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 trait ClientAdapter {
     fn capabilities(&self) -> AdapterCapabilities;
     fn discover(&self, context: &DiscoveryContext, snapshot: &mut InventorySnapshot);
+    fn action_capabilities(
+        &self,
+        record: &InventoryRecord,
+        source_revision: Option<String>,
+    ) -> InventoryActionCapabilities;
 }
 
 pub fn discover_inventory(home_dir: PathBuf, project_roots: Vec<PathBuf>) -> InventorySnapshot {
@@ -69,11 +78,26 @@ fn discover_inventory_with_paths(
     let mut snapshot = InventorySnapshot::new(context.project_roots.len());
     snapshot.warnings = warnings;
     let adapters: [&dyn ClientAdapter; 3] = [&ClaudeAdapter, &CodexAdapter, &CursorAdapter];
+    let mut source_revisions = HashMap::new();
     for adapter in adapters {
         snapshot.capabilities.push(adapter.capabilities());
+        let first_new_record = snapshot.records.len();
         adapter.discover(&context, &mut snapshot);
+        for record in &mut snapshot.records[first_new_record..] {
+            let source_revision = source_revisions
+                .entry(record.source_path.clone())
+                .or_insert_with(|| source_revision(Path::new(&record.source_path)))
+                .clone();
+            record.action_capabilities = adapter.action_capabilities(record, source_revision);
+        }
     }
     snapshot.finish()
+}
+
+fn source_revision(path: &Path) -> Option<String> {
+    std::fs::read(path)
+        .ok()
+        .map(|content| format!("sha256:{:x}", Sha256::digest(content)))
 }
 
 fn existing_unique_roots(project_roots: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<InventoryWarning>) {

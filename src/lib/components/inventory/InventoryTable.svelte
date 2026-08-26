@@ -4,6 +4,7 @@
 	import type { TranslationKey } from '$lib/i18n';
 	import type {
 		InventoryClient,
+		InventoryActionBlockedReason,
 		InventoryItemType,
 		InventoryRecord,
 		InventoryScope,
@@ -41,6 +42,18 @@
 		pluginConfig: 'inventory.sourcePluginConfig',
 		pluginSkills: 'inventory.sourcePluginSkills'
 	};
+	const blockedReasonLabels: Record<InventoryActionBlockedReason, TranslationKey> = {
+		alreadyEnabled: 'inventory.actionAlreadyEnabled',
+		alreadyDisabled: 'inventory.actionAlreadyDisabled',
+		stateUnavailable: 'inventory.actionStateUnavailable',
+		managedSource: 'inventory.actionManagedSource',
+		administratorSource: 'inventory.actionAdministratorSource',
+		policyControlled: 'inventory.actionPolicyControlled',
+		pluginOwnedSource: 'inventory.actionPluginOwnedSource',
+		malformedSource: 'inventory.actionMalformedSource',
+		brokenSymlink: 'inventory.actionBrokenSymlink',
+		unsupportedByClient: 'inventory.actionUnsupportedByClient'
+	};
 
 	function statusLabel(record: InventoryRecord): string {
 		if (record.enabled === null) return i18n.t('inventory.statusNotReported');
@@ -70,6 +83,14 @@
 			return i18n.t(trusted ? 'inventory.hookTrusted' : 'inventory.hookNotTrusted');
 		}
 		return i18n.t(trusted ? 'inventory.projectTrusted' : 'inventory.projectNotTrusted');
+	}
+
+	function actionLabel(record: InventoryRecord): string {
+		const { enable, disable } = record.actionCapabilities;
+		if (enable.available) return i18n.t('inventory.actionCanEnable');
+		if (disable.available) return i18n.t('inventory.actionCanDisable');
+		const reason = enable.blockedReason ?? disable.blockedReason ?? 'stateUnavailable';
+		return i18n.t(blockedReasonLabels[reason], { client: clientLabels[record.client] });
 	}
 </script>
 
@@ -126,6 +147,7 @@
 									<span>{i18n.t(record.protectedFields.length === 1 ? 'inventory.protectedField' : 'inventory.protectedFields', { count: record.protectedFields.length })}</span>
 								</div>
 							{/if}
+							<div class="mt-2 text-xs text-gray-500 dark:text-gray-400">{actionLabel(record)}</div>
 						</td>
 					</tr>
 				{/each}

@@ -2,8 +2,9 @@ use super::claude_policy::ClaudeManagedPolicy;
 use super::config::{push_json_mcps, read_json};
 use super::hooks::push_json_hooks;
 use super::models::{
-    AdapterCapabilities, ClientKind, DiscoveryContext, InventoryScope, InventorySnapshot,
-    SourceKind, TrustState,
+    source_action_blocker, ActionBlockedReason, AdapterCapabilities, ClientKind, DiscoveryContext,
+    InventoryActionCapabilities, InventoryItemType, InventoryRecord, InventoryScope,
+    InventorySnapshot, SourceKind, TrustState,
 };
 use super::skills::{discover_project_skill_roots, scan_skill_root};
 use super::ClientAdapter;
@@ -67,6 +68,39 @@ impl ClientAdapter for ClaudeAdapter {
                 }
             }
         }
+    }
+
+    fn action_capabilities(
+        &self,
+        record: &InventoryRecord,
+        source_revision: Option<String>,
+    ) -> InventoryActionCapabilities {
+        if let Some(reason) = source_action_blocker(record) {
+            return InventoryActionCapabilities::blocked(reason, source_revision);
+        }
+        if record.item_type == InventoryItemType::Mcp
+            && record.scope == InventoryScope::User
+            && record.enabled == Some(true)
+            && record.is_effective == Some(false)
+            && record.trust_state != TrustState::Untrusted
+        {
+            return InventoryActionCapabilities::blocked(
+                ActionBlockedReason::PolicyControlled,
+                source_revision,
+            );
+        }
+        if record.item_type == InventoryItemType::Mcp
+            && matches!(
+                record.source_kind,
+                SourceKind::UserConfig | SourceKind::ProjectConfig | SourceKind::LocalConfig
+            )
+        {
+            return InventoryActionCapabilities::stateful(record.enabled, source_revision);
+        }
+        InventoryActionCapabilities::blocked(
+            ActionBlockedReason::UnsupportedByClient,
+            source_revision,
+        )
     }
 }
 

@@ -13,6 +13,31 @@ export type InventorySourceKind =
 	| 'pluginConfig'
 	| 'pluginSkills';
 export type InventoryTrustState = 'notApplicable' | 'unknown' | 'trusted' | 'untrusted';
+export type InventoryActionBlockedReason =
+	| 'alreadyEnabled'
+	| 'alreadyDisabled'
+	| 'stateUnavailable'
+	| 'managedSource'
+	| 'administratorSource'
+	| 'policyControlled'
+	| 'pluginOwnedSource'
+	| 'malformedSource'
+	| 'brokenSymlink'
+	| 'unsupportedByClient';
+export type InventoryReloadGuidance = 'notRequired' | 'restartClient';
+
+export interface InventoryActionAvailability {
+	available: boolean;
+	blockedReason: InventoryActionBlockedReason | null;
+}
+
+export interface InventoryActionCapabilities {
+	enable: InventoryActionAvailability;
+	disable: InventoryActionAvailability;
+	confirmationRequired: boolean;
+	reloadGuidance: InventoryReloadGuidance;
+	sourceRevision: string | null;
+}
 
 export interface AdapterCapabilities {
 	client: InventoryClient;
@@ -39,6 +64,7 @@ export interface InventoryRecord {
 	sourcePriority: number;
 	protectedFields: string[];
 	detail: string | null;
+	actionCapabilities: InventoryActionCapabilities;
 }
 
 export interface InventoryWarning {

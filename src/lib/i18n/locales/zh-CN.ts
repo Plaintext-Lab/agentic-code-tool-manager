@@ -183,6 +183,18 @@ export const zhCN: Translations = {
 	'inventory.hookNotTrusted': '钩子未信任',
 	'inventory.protectedField': '已隐藏 {count} 组受保护字段',
 	'inventory.protectedFields': '已隐藏 {count} 组受保护字段',
+	'inventory.actionCanEnable': '确认后可以启用。',
+	'inventory.actionCanDisable': '确认后可以禁用。',
+	'inventory.actionAlreadyEnabled': '已启用。',
+	'inventory.actionAlreadyDisabled': '已禁用。',
+	'inventory.actionStateUnavailable': '当前状态不可用。',
+	'inventory.actionManagedSource': '托管设置无法在此处更改。',
+	'inventory.actionAdministratorSource': '管理员设置无法在此处更改。',
+	'inventory.actionPolicyControlled': '此设置由策略控制。',
+	'inventory.actionPluginOwnedSource': '此设置属于其插件包。',
+	'inventory.actionMalformedSource': '请先修复此格式错误的来源。',
+	'inventory.actionBrokenSymlink': '请先修复此断开的链接。',
+	'inventory.actionUnsupportedByClient': '{client} 未说明安全的单项控制方式。',
 
 	// ── 仪表板 ────────────────────────────────────────
 	'dashboard.overview': '总览',

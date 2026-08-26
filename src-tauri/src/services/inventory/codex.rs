@@ -1,8 +1,9 @@
 use super::config::{push_toml_mcps, read_json, read_toml};
 use super::hooks::{push_codex_json_hooks, push_toml_hooks};
 use super::models::{
-    AdapterCapabilities, ClientKind, DiscoveryContext, InventoryScope, InventorySnapshot,
-    SourceKind, TrustState,
+    source_action_blocker, ActionBlockedReason, AdapterCapabilities, ClientKind, DiscoveryContext,
+    InventoryActionCapabilities, InventoryRecord, InventoryScope, InventorySnapshot, SourceKind,
+    TrustState,
 };
 use super::plugins::discover_codex_plugins;
 use super::skills::{codex_disabled_skill_paths, discover_project_skill_roots, scan_skill_root};
@@ -72,6 +73,30 @@ impl ClientAdapter for CodexAdapter {
             global_hooks_enabled,
             snapshot,
         );
+    }
+
+    fn action_capabilities(
+        &self,
+        record: &InventoryRecord,
+        source_revision: Option<String>,
+    ) -> InventoryActionCapabilities {
+        if let Some(reason) = source_action_blocker(record) {
+            return InventoryActionCapabilities::blocked(reason, source_revision);
+        }
+        if matches!(
+            record.source_kind,
+            SourceKind::UserConfig
+                | SourceKind::ProjectConfig
+                | SourceKind::UserSkills
+                | SourceKind::ProjectSkills
+                | SourceKind::LegacySkills
+        ) {
+            return InventoryActionCapabilities::stateful(record.enabled, source_revision);
+        }
+        InventoryActionCapabilities::blocked(
+            ActionBlockedReason::UnsupportedByClient,
+            source_revision,
+        )
     }
 }
 
