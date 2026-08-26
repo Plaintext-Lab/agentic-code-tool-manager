@@ -176,6 +176,18 @@ export const en = {
 	'inventory.hookNotTrusted': 'Hook not trusted',
 	'inventory.protectedField': '{count} protected field group hidden',
 	'inventory.protectedFields': '{count} protected field groups hidden',
+	'inventory.actionCanEnable': 'Can be enabled after confirmation.',
+	'inventory.actionCanDisable': 'Can be disabled after confirmation.',
+	'inventory.actionAlreadyEnabled': 'Already enabled.',
+	'inventory.actionAlreadyDisabled': 'Already disabled.',
+	'inventory.actionStateUnavailable': 'The current state is unavailable.',
+	'inventory.actionManagedSource': 'Managed settings cannot be changed here.',
+	'inventory.actionAdministratorSource': 'Administrator settings cannot be changed here.',
+	'inventory.actionPolicyControlled': 'A policy controls this setting.',
+	'inventory.actionPluginOwnedSource': 'This setting belongs to its plugin package.',
+	'inventory.actionMalformedSource': 'Fix this malformed source before changing it.',
+	'inventory.actionBrokenSymlink': 'Fix this broken link before changing it.',
+	'inventory.actionUnsupportedByClient': '{client} does not document a safe per-item control.',
 
 	// ── Dashboard ────────────────────────────────────────
 	'dashboard.overview': 'Overview',

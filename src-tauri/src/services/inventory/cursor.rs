@@ -1,8 +1,9 @@
 use super::config::{push_json_mcps, read_json};
 use super::hooks::push_json_hooks;
 use super::models::{
-    AdapterCapabilities, ClientKind, DiscoveryContext, InventoryScope, InventorySnapshot,
-    SourceKind, TrustState,
+    source_action_blocker, ActionBlockedReason, AdapterCapabilities, ClientKind, DiscoveryContext,
+    InventoryActionCapabilities, InventoryRecord, InventoryScope, InventorySnapshot, SourceKind,
+    TrustState,
 };
 use super::skills::{discover_project_skill_roots, scan_skill_root};
 use super::ClientAdapter;
@@ -21,6 +22,24 @@ impl ClientAdapter for CursorAdapter {
         self.discover_skills(context, snapshot);
         self.discover_user_configs(context, snapshot);
         self.discover_project_configs(context, snapshot);
+    }
+
+    fn action_capabilities(
+        &self,
+        record: &InventoryRecord,
+        source_revision: String,
+    ) -> InventoryActionCapabilities {
+        let reason =
+            source_action_blocker(record).unwrap_or(ActionBlockedReason::UnsupportedByClient);
+        InventoryActionCapabilities::blocked(reason, Some(source_revision))
+    }
+
+    fn action_revision_sources(
+        &self,
+        _context: &DiscoveryContext,
+        record: &InventoryRecord,
+    ) -> Vec<String> {
+        vec![record.source_path.clone()]
     }
 }
 

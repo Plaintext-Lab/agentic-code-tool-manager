@@ -18,7 +18,7 @@ pub(super) fn codex_effective_state(
     handler_index: usize,
     enabled: bool,
     base_trust: TrustState,
-) -> (bool, TrustState) {
+) -> (bool, TrustState, bool) {
     let event_key = event_key(event);
     let key = format!(
         "{}:{event_key}:{group_index}:{handler_index}",
@@ -48,7 +48,8 @@ pub(super) fn codex_effective_state(
         (TrustState::Unknown, _) => TrustState::Unknown,
         (_, trust) => trust,
     };
-    (enabled, trust)
+    let approval_pending = enabled && hook_trust != TrustState::Trusted;
+    (enabled, trust, approval_pending)
 }
 
 fn codex_hook_hash(

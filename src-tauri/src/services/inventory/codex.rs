@@ -1,8 +1,9 @@
 use super::config::{push_toml_mcps, read_json, read_toml};
 use super::hooks::{push_codex_json_hooks, push_toml_hooks};
 use super::models::{
-    AdapterCapabilities, ClientKind, DiscoveryContext, InventoryScope, InventorySnapshot,
-    SourceKind, TrustState,
+    source_action_blocker, ActionBlockedReason, AdapterCapabilities, ClientKind, DiscoveryContext,
+    InventoryActionCapabilities, InventoryRecord, InventoryScope, InventorySnapshot, SourceKind,
+    TrustState,
 };
 use super::plugins::discover_codex_plugins;
 use super::skills::{codex_disabled_skill_paths, discover_project_skill_roots, scan_skill_root};
@@ -72,6 +73,71 @@ impl ClientAdapter for CodexAdapter {
             global_hooks_enabled,
             snapshot,
         );
+    }
+
+    fn action_capabilities(
+        &self,
+        record: &InventoryRecord,
+        source_revision: String,
+    ) -> InventoryActionCapabilities {
+        if let Some(reason) = source_action_blocker(record) {
+            return InventoryActionCapabilities::blocked(reason, Some(source_revision));
+        }
+        if matches!(
+            record.source_kind,
+            SourceKind::UserConfig
+                | SourceKind::ProjectConfig
+                | SourceKind::UserSkills
+                | SourceKind::ProjectSkills
+                | SourceKind::LegacySkills
+        ) {
+            if record.item_type == super::models::InventoryItemType::Hook && record.approval_pending
+            {
+                return InventoryActionCapabilities::pending_approval(
+                    true,
+                    super::models::ReloadGuidance::RestartClient,
+                    source_revision,
+                );
+            }
+            return InventoryActionCapabilities::stateful(
+                record.enabled,
+                true,
+                super::models::ReloadGuidance::RestartClient,
+                source_revision,
+            );
+        }
+        InventoryActionCapabilities::blocked(
+            ActionBlockedReason::UnsupportedByClient,
+            Some(source_revision),
+        )
+    }
+
+    fn action_revision_sources(
+        &self,
+        context: &DiscoveryContext,
+        record: &InventoryRecord,
+    ) -> Vec<String> {
+        let mut sources = vec![record.source_path.clone()];
+        if source_action_blocker(record).is_some() {
+            return sources;
+        }
+        let global_config = context.codex_home.join("config.toml").display().to_string();
+        match record.item_type {
+            super::models::InventoryItemType::Skill => sources.push(global_config),
+            super::models::InventoryItemType::Hook => {
+                sources.push(global_config);
+                if let Some(project_path) = record.project_path.as_ref() {
+                    sources.push(
+                        Path::new(project_path)
+                            .join(".codex/config.toml")
+                            .display()
+                            .to_string(),
+                    );
+                }
+            }
+            super::models::InventoryItemType::Mcp => {}
+        }
+        sources
     }
 }
 

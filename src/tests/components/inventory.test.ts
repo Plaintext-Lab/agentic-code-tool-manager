@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/svelte';
 import InventoryTable from '$lib/components/inventory/InventoryTable.svelte';
+import InventoryWarningList from '$lib/components/inventory/InventoryWarningList.svelte';
 import { i18n } from '$lib/i18n';
 import type { InventoryRecord } from '$lib/types';
 
@@ -21,7 +22,14 @@ const baseRecord: InventoryRecord = {
 	isEffective: true,
 	sourcePriority: 100,
 	protectedFields: ['Environment variables', 'HTTP headers'],
-	detail: 'STDIO MCP server'
+	detail: 'STDIO MCP server',
+	actionCapabilities: {
+		enable: { available: false, blockedReason: 'alreadyEnabled' },
+		disable: { available: true, blockedReason: null },
+		confirmationRequired: true,
+		reloadGuidance: 'restartClient',
+		sourceRevision: 'sha256:safe-fixture-revision'
+	}
 };
 
 describe('InventoryTable', () => {
@@ -101,6 +109,125 @@ describe('InventoryTable', () => {
 			expect(screen.getByRole('columnheader', { name: '工具' })).toBeInTheDocument();
 			expect(screen.getByText('用户配置')).toBeInTheDocument();
 			expect(screen.getByText('已启用')).toBeInTheDocument();
+		} finally {
+			i18n.setLocale('en');
+		}
+	});
+
+	it('explains why records are read-only without showing protected configuration', () => {
+		render(InventoryTable, {
+			props: {
+				records: [
+					{
+						...baseRecord,
+						id: 'claude:mcp:managed',
+						client: 'claude',
+						name: 'managed-tool',
+						actionCapabilities: {
+							enable: { available: false, blockedReason: 'managedSource' },
+							disable: { available: false, blockedReason: 'managedSource' },
+							confirmationRequired: false,
+							reloadGuidance: 'notRequired',
+							sourceRevision: 'sha256:does-not-reveal-managed-secret'
+						}
+					},
+					{
+						...baseRecord,
+						id: 'cursor:mcp:unsupported',
+						client: 'cursor',
+						name: 'cursor-tool',
+						actionCapabilities: {
+							enable: { available: false, blockedReason: 'unsupportedByClient' },
+							disable: { available: false, blockedReason: 'unsupportedByClient' },
+							confirmationRequired: false,
+							reloadGuidance: 'notRequired',
+							sourceRevision: 'sha256:does-not-reveal-cursor-secret'
+						}
+					}
+				]
+			}
+		});
+
+		expect(screen.getByText('Managed settings cannot be changed here.')).toBeInTheDocument();
+		expect(screen.getByText('Cursor does not document a safe per-item control.')).toBeInTheDocument();
+		expect(document.body.textContent).not.toContain('does-not-reveal-managed-secret');
+		expect(document.body.textContent).not.toContain('does-not-reveal-cursor-secret');
+	});
+
+	it.each([
+		['zh-CN', '托管设置无法在此处更改。'],
+		['zh-TW', '受管理設定無法在此處變更。']
+	] as const)('translates blocked explanations in %s', (locale, explanation) => {
+		i18n.setLocale(locale);
+		try {
+			render(InventoryTable, {
+				props: {
+					records: [
+						{
+							...baseRecord,
+							actionCapabilities: {
+								enable: { available: false, blockedReason: 'managedSource' },
+								disable: { available: false, blockedReason: 'managedSource' },
+								confirmationRequired: false,
+								reloadGuidance: 'notRequired',
+								sourceRevision: 'sha256:safe-fixture-revision'
+							}
+						}
+					]
+				}
+			});
+			expect(screen.getByText(explanation)).toBeInTheDocument();
+		} finally {
+			i18n.setLocale('en');
+		}
+	});
+
+	it.each([
+		['en', 'Fix this broken link before changing it.'],
+		['zh-CN', '请先修复此断开的链接。'],
+		['zh-TW', '請先修正此中斷的連結。']
+	] as const)('translates visible broken-link warnings in %s', (locale, explanation) => {
+		i18n.setLocale(locale);
+		try {
+			render(InventoryWarningList, {
+				props: {
+					warnings: [
+						{
+							client: 'codex',
+							sourcePath: '/Users/test/.agents/skills/broken-link',
+							message: 'untranslated warning with protected-value',
+							blockedReason: 'brokenSymlink'
+						}
+					]
+				}
+			});
+			expect(screen.getByText(explanation)).toBeInTheDocument();
+			expect(document.body.textContent).not.toContain('protected-value');
+		} finally {
+			i18n.setLocale('en');
+		}
+	});
+
+	it.each([
+		['en', 'The current state is unavailable.'],
+		['zh-CN', '当前状态不可用。'],
+		['zh-TW', '目前狀態無法取得。']
+	] as const)('translates visible missing-revision warnings in %s', (locale, explanation) => {
+		i18n.setLocale(locale);
+		try {
+			render(InventoryWarningList, {
+				props: {
+					warnings: [
+						{
+							client: 'claude',
+							sourcePath: '/Users/test/.claude.json',
+							message: 'untranslated revision warning',
+							blockedReason: 'stateUnavailable'
+						}
+					]
+				}
+			});
+			expect(screen.getByText(explanation)).toBeInTheDocument();
 		} finally {
 			i18n.setLocale('en');
 		}

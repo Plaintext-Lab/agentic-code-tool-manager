@@ -1,6 +1,7 @@
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -82,6 +83,121 @@ pub enum TrustState {
     Untrusted,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionBlockedReason {
+    AlreadyEnabled,
+    AlreadyDisabled,
+    StateUnavailable,
+    ManagedSource,
+    AdministratorSource,
+    PolicyControlled,
+    PluginOwnedSource,
+    MalformedSource,
+    BrokenSymlink,
+    UnsupportedByClient,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReloadGuidance {
+    NotRequired,
+    RestartClient,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionAvailability {
+    pub available: bool,
+    pub blocked_reason: Option<ActionBlockedReason>,
+}
+
+impl ActionAvailability {
+    fn available() -> Self {
+        Self {
+            available: true,
+            blocked_reason: None,
+        }
+    }
+
+    fn blocked(reason: ActionBlockedReason) -> Self {
+        Self {
+            available: false,
+            blocked_reason: Some(reason),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryActionCapabilities {
+    pub enable: ActionAvailability,
+    pub disable: ActionAvailability,
+    pub confirmation_required: bool,
+    pub reload_guidance: ReloadGuidance,
+    pub source_revision: Option<String>,
+}
+
+impl InventoryActionCapabilities {
+    /// Reports native actions for a record whose client has a documented state control.
+    pub fn stateful(
+        enabled: Option<bool>,
+        confirmation_required: bool,
+        reload_guidance: ReloadGuidance,
+        source_revision: String,
+    ) -> Self {
+        let (enable, disable) = match enabled {
+            Some(true) => (
+                ActionAvailability::blocked(ActionBlockedReason::AlreadyEnabled),
+                ActionAvailability::available(),
+            ),
+            Some(false) => (
+                ActionAvailability::available(),
+                ActionAvailability::blocked(ActionBlockedReason::AlreadyDisabled),
+            ),
+            None => (
+                ActionAvailability::blocked(ActionBlockedReason::StateUnavailable),
+                ActionAvailability::blocked(ActionBlockedReason::StateUnavailable),
+            ),
+        };
+        let confirmation_required =
+            confirmation_required && (enable.available || disable.available);
+        Self {
+            enable,
+            disable,
+            confirmation_required,
+            reload_guidance,
+            source_revision: Some(source_revision),
+        }
+    }
+
+    /// Reports native actions when an enabled definition is waiting for client approval.
+    pub fn pending_approval(
+        confirmation_required: bool,
+        reload_guidance: ReloadGuidance,
+        source_revision: String,
+    ) -> Self {
+        Self {
+            enable: ActionAvailability::available(),
+            disable: ActionAvailability::available(),
+            confirmation_required,
+            reload_guidance,
+            source_revision: Some(source_revision),
+        }
+    }
+
+    /// Reports why neither native action can be offered safely.
+    pub fn blocked(reason: ActionBlockedReason, source_revision: Option<String>) -> Self {
+        Self {
+            enable: ActionAvailability::blocked(reason),
+            disable: ActionAvailability::blocked(reason),
+            confirmation_required: false,
+            reload_guidance: ReloadGuidance::NotRequired,
+            source_revision,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdapterCapabilities {
@@ -122,6 +238,11 @@ pub struct InventoryRecord {
     pub source_priority: u16,
     pub protected_fields: Vec<String>,
     pub detail: Option<String>,
+    pub action_capabilities: InventoryActionCapabilities,
+    #[serde(skip)]
+    pub(crate) action_restriction: Option<ActionBlockedReason>,
+    #[serde(skip)]
+    pub(crate) approval_pending: bool,
 }
 
 impl InventoryRecord {
@@ -166,8 +287,44 @@ impl InventoryRecord {
             source_priority,
             protected_fields: Vec::new(),
             detail: None,
+            action_capabilities: InventoryActionCapabilities::blocked(
+                ActionBlockedReason::UnsupportedByClient,
+                None,
+            ),
+            action_restriction: None,
+            approval_pending: false,
         }
     }
+
+    /// Marks a discovered record read-only for a normalized, non-sensitive reason.
+    pub(crate) fn restrict_actions(&mut self, reason: ActionBlockedReason) {
+        if self.action_restriction.is_none() {
+            self.action_restriction = Some(reason);
+        }
+    }
+}
+
+/// Returns restrictions shared by all client adapters before client-native checks.
+pub fn source_action_blocker(record: &InventoryRecord) -> Option<ActionBlockedReason> {
+    if record.source_kind == SourceKind::ManagedConfig {
+        return Some(ActionBlockedReason::ManagedSource);
+    }
+    if record.scope == InventoryScope::Admin || record.source_kind == SourceKind::AdminSkills {
+        return Some(ActionBlockedReason::AdministratorSource);
+    }
+    if matches!(
+        record.source_kind,
+        SourceKind::PluginConfig | SourceKind::PluginSkills
+    ) {
+        return Some(ActionBlockedReason::PluginOwnedSource);
+    }
+    if record.is_symlink && record.resolved_path.is_none() {
+        return Some(ActionBlockedReason::BrokenSymlink);
+    }
+    if let Some(reason) = record.action_restriction {
+        return Some(reason);
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -176,6 +333,7 @@ pub struct InventoryWarning {
     pub client: Option<ClientKind>,
     pub source_path: String,
     pub message: String,
+    pub blocked_reason: Option<ActionBlockedReason>,
 }
 
 impl InventoryWarning {
@@ -188,6 +346,22 @@ impl InventoryWarning {
             client: Some(client),
             source_path: source_path.into(),
             message: message.into(),
+            blocked_reason: None,
+        }
+    }
+
+    /// Creates a warning whose safe reason can be translated by the interface.
+    pub fn blocked(
+        client: ClientKind,
+        source_path: impl Into<String>,
+        message: impl Into<String>,
+        blocked_reason: ActionBlockedReason,
+    ) -> Self {
+        Self {
+            client: Some(client),
+            source_path: source_path.into(),
+            message: message.into(),
+            blocked_reason: Some(blocked_reason),
         }
     }
 
@@ -196,6 +370,7 @@ impl InventoryWarning {
             client: None,
             source_path: source_path.into(),
             message: message.into(),
+            blocked_reason: None,
         }
     }
 }
@@ -207,6 +382,14 @@ pub struct InventorySnapshot {
     pub warnings: Vec<InventoryWarning>,
     pub capabilities: Vec<AdapterCapabilities>,
     pub scanned_project_count: usize,
+    #[serde(skip)]
+    source_revisions: HashMap<String, SourceRevisionState>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceRevisionState {
+    marker: String,
+    restriction: Option<ActionBlockedReason>,
 }
 
 impl InventorySnapshot {
@@ -216,7 +399,68 @@ impl InventorySnapshot {
             warnings: Vec::new(),
             capabilities: Vec::new(),
             scanned_project_count,
+            source_revisions: HashMap::new(),
         }
+    }
+
+    /// Stores a revision from the exact bytes used to parse a discovered source.
+    pub(crate) fn record_source_revision(&mut self, path: &Path, content: &[u8]) {
+        self.source_revisions.insert(
+            path.display().to_string(),
+            SourceRevisionState {
+                marker: format!("present:sha256:{:x}", Sha256::digest(content)),
+                restriction: None,
+            },
+        );
+    }
+
+    /// Stores that a native state source was absent when discovery read it.
+    pub(crate) fn record_source_absence(&mut self, path: &Path) {
+        self.source_revisions
+            .entry(path.display().to_string())
+            .or_insert_with(|| SourceRevisionState {
+                marker: "absent".to_string(),
+                restriction: None,
+            });
+    }
+
+    /// Marks a source unsafe while retaining its observed fingerprint state.
+    pub(crate) fn restrict_source(&mut self, path: &str, reason: ActionBlockedReason) {
+        let state = self
+            .source_revisions
+            .entry(path.to_string())
+            .or_insert_with(|| SourceRevisionState {
+                marker: "unobserved".to_string(),
+                restriction: None,
+            });
+        if state.restriction.is_none() {
+            state.restriction = Some(reason);
+        }
+    }
+
+    /// Builds one opaque revision across every source that owns an action's state.
+    pub(crate) fn composite_source_revision(
+        &self,
+        source_paths: &[String],
+    ) -> (String, Option<ActionBlockedReason>) {
+        let mut source_paths = source_paths.to_vec();
+        source_paths.sort();
+        source_paths.dedup();
+        let mut hasher = Sha256::new();
+        let mut restriction = None;
+        for source_path in source_paths {
+            let state = self.source_revisions.get(&source_path);
+            let marker = state.map_or("unobserved", |state| state.marker.as_str());
+            if restriction.is_none() {
+                restriction = state.and_then(|state| state.restriction).or_else(|| {
+                    (!self.source_revisions.contains_key(&source_path))
+                        .then_some(ActionBlockedReason::StateUnavailable)
+                });
+            }
+            hash_revision_part(&mut hasher, source_path.as_bytes());
+            hash_revision_part(&mut hasher, marker.as_bytes());
+        }
+        (format!("sha256:{:x}", hasher.finalize()), restriction)
     }
 
     pub fn finish(mut self) -> Self {
@@ -250,6 +494,11 @@ impl InventorySnapshot {
         });
         self
     }
+}
+
+fn hash_revision_part(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value);
 }
 
 fn reconcile_contextual_effectiveness(

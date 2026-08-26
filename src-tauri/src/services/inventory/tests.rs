@@ -1,7 +1,11 @@
-use super::models::{ClientKind, InventoryItemType, SourceKind, TrustState};
+use super::codex::CodexAdapter;
+use super::models::{
+    ActionBlockedReason, ClientKind, InventoryItemType, InventoryRecord, InventoryScope,
+    InventorySnapshot, InventoryWarning, ReloadGuidance, SourceKind, TrustState,
+};
 use super::{
     codex_home_path, discover_inventory, discover_inventory_with_codex_home,
-    discover_inventory_with_paths,
+    discover_inventory_with_paths, warning_source_restriction, ClientAdapter,
 };
 use std::fs;
 use std::path::Path;
@@ -74,6 +78,10 @@ fn discovers_all_clients_and_never_serializes_secret_values() {
         .records
         .iter()
         .any(|record| !record.protected_fields.is_empty()));
+    assert!(snapshot
+        .records
+        .iter()
+        .all(|record| record.action_capabilities.source_revision.is_some()));
 
     let serialized = serde_json::to_string(&snapshot).unwrap();
     for secret in [
@@ -92,6 +100,267 @@ fn discovers_all_clients_and_never_serializes_secret_values() {
             "serialized secret value: {secret}"
         );
     }
+}
+
+#[test]
+fn reports_normalized_action_capabilities_for_each_client_boundary() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let managed_settings = fixture.path().join("managed-settings-missing.json");
+    let managed_mcp = fixture.path().join("managed-mcp.json");
+    let project = fixture.path().join("project");
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers":{"claude-server":{"command":"claude-secret-command"},"disabled-policy-server":{"command":"disabled-policy-secret","disabled":true}}}"#,
+    );
+    write(
+        &home.join(".codex/config.toml"),
+        "[mcp_servers.codex-server]\ncommand = 'codex-secret-command'\n",
+    );
+    write(
+        &home.join(".cursor/mcp.json"),
+        r#"{"mcpServers":{"cursor-server":{"command":"cursor-secret-command"}}}"#,
+    );
+    write(
+        &managed_mcp,
+        r#"{"mcpServers":{"managed-server":{"command":"managed-secret-command"}}}"#,
+    );
+    write(
+        &project.join(".mcp.json"),
+        r#"{"mcpServers":{"project-policy-server":{"command":"project-policy-secret"}}}"#,
+    );
+
+    let snapshot = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings.clone(),
+        fixture.path().join("managed-mcp-missing.json"),
+        vec![project.clone()],
+    );
+    let record = |name: &str| {
+        snapshot
+            .records
+            .iter()
+            .find(|record| record.name == name)
+            .expect("fixture record should be discovered")
+    };
+
+    for name in ["claude-server", "codex-server"] {
+        let actions = &record(name).action_capabilities;
+        assert!(!actions.enable.available);
+        assert_eq!(
+            actions.enable.blocked_reason,
+            Some(ActionBlockedReason::AlreadyEnabled)
+        );
+        assert!(actions.disable.available);
+        assert_eq!(actions.disable.blocked_reason, None);
+        assert!(actions.confirmation_required);
+        assert_eq!(actions.reload_guidance, ReloadGuidance::RestartClient);
+        assert!(actions
+            .source_revision
+            .as_deref()
+            .is_some_and(|revision| revision.starts_with("sha256:")));
+    }
+    let first_codex_revision = record("codex-server")
+        .action_capabilities
+        .source_revision
+        .clone();
+    write(
+        &home.join(".codex/config.toml"),
+        "[mcp_servers.codex-server]\ncommand = 'changed-codex-command'\n",
+    );
+    let changed_snapshot = discover_inventory(home.clone(), Vec::new());
+    let changed_codex_revision = changed_snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "codex-server")
+        .expect("changed Codex fixture should be discovered")
+        .action_capabilities
+        .source_revision
+        .clone();
+    assert_ne!(first_codex_revision, changed_codex_revision);
+
+    let cursor_actions = &record("cursor-server").action_capabilities;
+    assert!(!cursor_actions.enable.available);
+    assert!(!cursor_actions.disable.available);
+    assert_eq!(
+        cursor_actions.enable.blocked_reason,
+        Some(ActionBlockedReason::UnsupportedByClient)
+    );
+    assert_eq!(
+        cursor_actions.disable.blocked_reason,
+        Some(ActionBlockedReason::UnsupportedByClient)
+    );
+
+    let managed_snapshot = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings,
+        managed_mcp,
+        vec![project],
+    );
+    let managed_actions = &managed_snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "managed-server")
+        .expect("managed fixture record should be discovered")
+        .action_capabilities;
+    assert!(!managed_actions.enable.available);
+    assert!(!managed_actions.disable.available);
+    assert_eq!(
+        managed_actions.enable.blocked_reason,
+        Some(ActionBlockedReason::ManagedSource)
+    );
+    for name in [
+        "claude-server",
+        "disabled-policy-server",
+        "project-policy-server",
+    ] {
+        let policy_controlled = managed_snapshot
+            .records
+            .iter()
+            .find(|record| record.name == name)
+            .expect("managed policy should leave the source record visible");
+        assert_eq!(
+            policy_controlled.action_capabilities.enable.blocked_reason,
+            Some(ActionBlockedReason::PolicyControlled)
+        );
+        assert_eq!(
+            policy_controlled.action_capabilities.disable.blocked_reason,
+            Some(ActionBlockedReason::PolicyControlled)
+        );
+    }
+
+    let serialized = format!(
+        "{}{}",
+        serde_json::to_string(&snapshot).unwrap(),
+        serde_json::to_string(&managed_snapshot).unwrap()
+    );
+    for protected_value in [
+        "claude-secret-command",
+        "codex-secret-command",
+        "cursor-secret-command",
+        "managed-secret-command",
+        "changed-codex-command",
+        "disabled-policy-secret",
+        "project-policy-secret",
+    ] {
+        assert!(!serialized.contains(protected_value));
+    }
+}
+
+#[test]
+fn codex_boundary_blocks_administrator_and_broken_link_sources() {
+    let mut administrator = InventoryRecord::new(
+        ClientKind::Codex,
+        InventoryItemType::Skill,
+        "administrator-skill".to_string(),
+        InventoryScope::Admin,
+        SourceKind::AdminSkills,
+        "/etc/codex/skills/administrator-skill/SKILL.md".to_string(),
+        None,
+        0,
+        300,
+    );
+    administrator.enabled = Some(true);
+    administrator.is_effective = Some(true);
+    let administrator_actions = CodexAdapter
+        .action_capabilities(&administrator, "sha256:administrator-fixture".to_string());
+    assert_eq!(
+        administrator_actions.disable.blocked_reason,
+        Some(ActionBlockedReason::AdministratorSource)
+    );
+
+    let mut broken_link = InventoryRecord::new(
+        ClientKind::Codex,
+        InventoryItemType::Skill,
+        "broken-link".to_string(),
+        InventoryScope::User,
+        SourceKind::UserSkills,
+        "/tmp/broken-link/SKILL.md".to_string(),
+        None,
+        0,
+        100,
+    );
+    broken_link.enabled = Some(true);
+    broken_link.is_effective = Some(true);
+    broken_link.is_symlink = true;
+    let broken_link_actions =
+        CodexAdapter.action_capabilities(&broken_link, "sha256:broken-link".to_string());
+    assert_eq!(
+        broken_link_actions.disable.blocked_reason,
+        Some(ActionBlockedReason::BrokenSymlink)
+    );
+
+    let mut missing_revision = InventoryRecord::new(
+        ClientKind::Codex,
+        InventoryItemType::Mcp,
+        "missing-revision".to_string(),
+        InventoryScope::User,
+        SourceKind::UserConfig,
+        "/tmp/config.toml".to_string(),
+        None,
+        0,
+        100,
+    );
+    missing_revision.enabled = Some(true);
+    missing_revision.is_effective = Some(true);
+    missing_revision.restrict_actions(ActionBlockedReason::StateUnavailable);
+    let missing_revision_actions =
+        CodexAdapter.action_capabilities(&missing_revision, "sha256:unobserved-source".to_string());
+    assert_eq!(
+        missing_revision_actions.disable.blocked_reason,
+        Some(ActionBlockedReason::StateUnavailable)
+    );
+}
+
+#[test]
+fn reports_malformed_and_plugin_owned_records_as_read_only() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let marketplace = fixture.path().join("marketplace");
+    let plugin = marketplace.join("plugins/demo");
+    write(
+        &home.join(".agents/skills/malformed/SKILL.md"),
+        "---\nname: malformed\ndescription: missing delimiter\n",
+    );
+    write(
+        &marketplace.join(".agents/plugins/marketplace.json"),
+        r#"{"name":"local","plugins":[{"name":"demo","source":"./plugins/demo"}]}"#,
+    );
+    write(
+        &plugin.join(".codex-plugin/plugin.json"),
+        r#"{"name":"demo","skills":"./skills/"}"#,
+    );
+    write_skill(&plugin.join("skills/plugin-skill/SKILL.md"));
+    write(
+        &home.join(".codex/config.toml"),
+        &format!(
+            "[marketplaces.local]\nsource_type = 'local'\nsource = '{}'\n\n[plugins.'demo@local']\nenabled = true\n",
+            marketplace.display()
+        ),
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+    let malformed = snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "malformed")
+        .expect("malformed skill should remain visible");
+    let plugin_skill = snapshot
+        .records
+        .iter()
+        .find(|record| record.source_kind == SourceKind::PluginSkills)
+        .expect("plugin skill should be discovered");
+
+    assert_eq!(
+        malformed.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+    assert_eq!(
+        plugin_skill.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::PluginOwnedSource)
+    );
 }
 
 #[test]
@@ -144,6 +413,203 @@ fn disabled_codex_skill_is_reported_without_deleting_it() {
         .expect("disabled skill should remain visible");
     assert_eq!(skill.enabled, Some(false));
     assert!(skill_path.exists());
+}
+
+#[test]
+fn action_revisions_cover_native_state_owners() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let project = fixture.path().join("project");
+    let skill_path = home.join(".agents/skills/stateful-skill/SKILL.md");
+    write_skill(&skill_path);
+    write(
+        &home.join(".codex/hooks.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"stateful-hook"}]}]}}"#,
+    );
+    write(
+        &project.join(".mcp.json"),
+        r#"{"mcpServers":{"stateful-project":{"command":"project-server"}}}"#,
+    );
+    write(
+        &home.join(".claude.json"),
+        &format!(
+            r#"{{"projects":{{"{}":{{"hasTrustDialogAccepted":true,"enableAllProjectMcpServers":true,"disabledMcpjsonServers":[]}}}}}}"#,
+            project.display()
+        ),
+    );
+
+    let first = discover_inventory(home.clone(), vec![project.clone()]);
+    let revision = |snapshot: &super::models::InventorySnapshot,
+                    client: ClientKind,
+                    item_type: InventoryItemType,
+                    name: &str| {
+        snapshot
+            .records
+            .iter()
+            .find(|record| {
+                record.client == client && record.item_type == item_type && record.name == name
+            })
+            .expect("stateful fixture should be discovered")
+            .action_capabilities
+            .source_revision
+            .clone()
+            .expect("discovered record should have a revision")
+    };
+    let first_skill = revision(
+        &first,
+        ClientKind::Codex,
+        InventoryItemType::Skill,
+        "shared-skill",
+    );
+    let first_hook = revision(
+        &first,
+        ClientKind::Codex,
+        InventoryItemType::Hook,
+        "Stop hook",
+    );
+    let first_project_mcp = revision(
+        &first,
+        ClientKind::Claude,
+        InventoryItemType::Mcp,
+        "stateful-project",
+    );
+
+    write(
+        &home.join(".codex/config.toml"),
+        &format!(
+            "[features]\ncodex_hooks = false\n\n[[skills.config]]\npath = '{}'\nenabled = false\n",
+            skill_path.display()
+        ),
+    );
+    write(
+        &home.join(".claude.json"),
+        &format!(
+            r#"{{"projects":{{"{}":{{"hasTrustDialogAccepted":true,"enableAllProjectMcpServers":true,"disabledMcpjsonServers":["stateful-project"]}}}}}}"#,
+            project.display()
+        ),
+    );
+
+    let changed = discover_inventory(home, vec![project]);
+    assert_ne!(
+        first_skill,
+        revision(
+            &changed,
+            ClientKind::Codex,
+            InventoryItemType::Skill,
+            "shared-skill"
+        )
+    );
+    assert_ne!(
+        first_hook,
+        revision(
+            &changed,
+            ClientKind::Codex,
+            InventoryItemType::Hook,
+            "Stop hook"
+        )
+    );
+    assert_ne!(
+        first_project_mcp,
+        revision(
+            &changed,
+            ClientKind::Claude,
+            InventoryItemType::Mcp,
+            "stateful-project"
+        )
+    );
+}
+
+#[test]
+fn claude_action_revisions_cover_managed_policy_sources() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let managed_settings = fixture.path().join("managed-settings.json");
+    let managed_mcp = fixture.path().join("managed-mcp.json");
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers":{"policy-sensitive":{"command":"server"}}}"#,
+    );
+    let revision = |snapshot: &InventorySnapshot| {
+        snapshot
+            .records
+            .iter()
+            .find(|record| record.client == ClientKind::Claude && record.name == "policy-sensitive")
+            .expect("Claude MCP should be discovered")
+            .action_capabilities
+            .source_revision
+            .clone()
+    };
+
+    let initial = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings.clone(),
+        managed_mcp.clone(),
+        Vec::new(),
+    );
+    let initial_revision = revision(&initial);
+
+    write(
+        &managed_settings,
+        r#"{"deniedMcpServers":["policy-sensitive"]}"#,
+    );
+    let policy_changed = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings.clone(),
+        managed_mcp.clone(),
+        Vec::new(),
+    );
+    let policy_revision = revision(&policy_changed);
+    assert_ne!(initial_revision, policy_revision);
+
+    write(
+        &managed_mcp,
+        r#"{"mcpServers":{"managed":{"command":"managed-server"}}}"#,
+    );
+    let managed_mcp_created = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings,
+        managed_mcp,
+        Vec::new(),
+    );
+    assert_ne!(policy_revision, revision(&managed_mcp_created));
+}
+
+#[test]
+fn only_warnings_with_explicit_blocked_reasons_restrict_sources() {
+    let ordinary = InventoryWarning::new(
+        ClientKind::Codex,
+        "/fixture/unreadable-skill",
+        "Skipped an unreadable or cyclic skill path.",
+    );
+    assert_eq!(warning_source_restriction(&ordinary), None);
+
+    let malformed = InventoryWarning::blocked(
+        ClientKind::Codex,
+        "/fixture/config.toml",
+        "Skipped a malformed entry.",
+        ActionBlockedReason::MalformedSource,
+    );
+    assert_eq!(
+        warning_source_restriction(&malformed),
+        Some((
+            "/fixture/config.toml".to_string(),
+            ActionBlockedReason::MalformedSource
+        ))
+    );
+}
+
+#[test]
+fn first_source_restriction_preserves_its_specific_reason() {
+    let source_path = "/fixture/broken-link.json";
+    let mut snapshot = InventorySnapshot::new(0);
+    snapshot.restrict_source(source_path, ActionBlockedReason::BrokenSymlink);
+
+    let (_, restriction) = snapshot.composite_source_revision(&[source_path.to_string()]);
+
+    assert_eq!(restriction, Some(ActionBlockedReason::BrokenSymlink));
 }
 
 #[test]
@@ -271,6 +737,8 @@ trusted_hash = "sha256:620fb822b32c78c73a2c5817199b662d4e82c221d93dd1b85bf843cf8
     assert_eq!(hooks[0].is_effective, Some(true));
     assert_eq!(hooks[1].trust_state, TrustState::Untrusted);
     assert_eq!(hooks[1].is_effective, Some(false));
+    assert!(hooks[1].action_capabilities.enable.available);
+    assert!(hooks[1].action_capabilities.disable.available);
 }
 
 #[test]
@@ -522,6 +990,9 @@ fn pending_claude_project_mcp_is_not_effective() {
     assert_eq!(approved.is_effective, Some(true));
     assert_eq!(pending.enabled, Some(true));
     assert_eq!(pending.is_effective, Some(false));
+    assert!(pending.action_capabilities.enable.available);
+    assert_eq!(pending.action_capabilities.enable.blocked_reason, None);
+    assert!(pending.action_capabilities.disable.available);
     assert_eq!(automatically_approved.is_effective, Some(true));
 }
 
@@ -987,7 +1458,15 @@ fn malformed_mcp_transports_are_skipped_with_warnings() {
     let snapshot = discover_inventory(home, Vec::new());
 
     for name in ["valid-json", "valid-toml"] {
-        assert!(snapshot.records.iter().any(|record| record.name == name));
+        let record = snapshot
+            .records
+            .iter()
+            .find(|record| record.name == name)
+            .expect("valid sibling should remain visible");
+        assert_eq!(
+            record.action_capabilities.disable.blocked_reason,
+            Some(ActionBlockedReason::MalformedSource)
+        );
     }
     for name in ["empty-json", "null-url", "empty-toml", "blank-url"] {
         assert!(!snapshot.records.iter().any(|record| record.name == name));
@@ -1018,6 +1497,7 @@ fn dangling_configuration_symlink_produces_a_warning() {
     assert!(snapshot.warnings.iter().any(|warning| {
         warning.source_path == config_path.display().to_string()
             && warning.message.contains("symlink")
+            && warning.blocked_reason == Some(ActionBlockedReason::BrokenSymlink)
     }));
 }
 
@@ -1124,7 +1604,9 @@ fn symlinked_skills_resolve_and_cycles_become_warnings() {
     assert!(linked.is_symlink);
     assert_ne!(linked.original_path, linked.resolved_path.clone().unwrap());
     assert!(snapshot.warnings.iter().any(|warning| {
-        warning.source_path.ends_with("broken-skill") && warning.message.contains("broken")
+        warning.source_path.ends_with("broken-skill")
+            && warning.message.contains("broken")
+            && warning.blocked_reason == Some(ActionBlockedReason::BrokenSymlink)
     }));
     assert!(snapshot.warnings.iter().any(|warning| {
         warning.source_path.ends_with("cycle") && warning.message.contains("cyclic")

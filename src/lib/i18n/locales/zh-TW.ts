@@ -178,6 +178,18 @@ export const zhTW: Translations = {
 	'inventory.hookNotTrusted': '鉤子未信任',
 	'inventory.protectedField': '已隱藏 {count} 組受保護欄位',
 	'inventory.protectedFields': '已隱藏 {count} 組受保護欄位',
+	'inventory.actionCanEnable': '確認後可以啟用。',
+	'inventory.actionCanDisable': '確認後可以停用。',
+	'inventory.actionAlreadyEnabled': '已啟用。',
+	'inventory.actionAlreadyDisabled': '已停用。',
+	'inventory.actionStateUnavailable': '目前狀態無法取得。',
+	'inventory.actionManagedSource': '受管理設定無法在此處變更。',
+	'inventory.actionAdministratorSource': '管理員設定無法在此處變更。',
+	'inventory.actionPolicyControlled': '此設定由政策控制。',
+	'inventory.actionPluginOwnedSource': '此設定屬於其外掛套件。',
+	'inventory.actionMalformedSource': '請先修正此格式錯誤的來源。',
+	'inventory.actionBrokenSymlink': '請先修正此中斷的連結。',
+	'inventory.actionUnsupportedByClient': '{client} 未說明安全的單項控制方式。',
 
 	// ── 儀表板 ────────────────────────────────────────
 	'dashboard.overview': '總覽',

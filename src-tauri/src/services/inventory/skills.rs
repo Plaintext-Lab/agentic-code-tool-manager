@@ -1,7 +1,7 @@
 use super::config::paths_differ;
 use super::models::{
-    effective_state, ClientKind, InventoryItemType, InventoryRecord, InventoryScope,
-    InventorySnapshot, InventoryWarning, SourceKind, TrustState,
+    effective_state, ActionBlockedReason, ClientKind, InventoryItemType, InventoryRecord,
+    InventoryScope, InventorySnapshot, InventoryWarning, SourceKind, TrustState,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -52,15 +52,20 @@ pub fn scan_skill_root(
                     .map(|metadata| metadata.file_type().is_symlink())
                     .unwrap_or(false)
                     && std::fs::metadata(error_path).is_err();
-                snapshot.warnings.push(InventoryWarning::new(
-                    client,
-                    error_path.display().to_string(),
-                    if is_broken_symlink {
-                        "Skipped a broken skill symlink."
-                    } else {
-                        "Skipped an unreadable or cyclic skill path."
-                    },
-                ));
+                snapshot.warnings.push(if is_broken_symlink {
+                    InventoryWarning::blocked(
+                        client,
+                        error_path.display().to_string(),
+                        "Skipped a broken skill symlink.",
+                        ActionBlockedReason::BrokenSymlink,
+                    )
+                } else {
+                    InventoryWarning::new(
+                        client,
+                        error_path.display().to_string(),
+                        "Skipped an unreadable or cyclic skill path.",
+                    )
+                });
                 continue;
             }
         };
@@ -101,6 +106,7 @@ pub fn scan_skill_root(
                 continue;
             }
         };
+        snapshot.record_source_revision(skill_file, content.as_bytes());
         let folder_name = skill_file
             .parent()
             .and_then(Path::file_name)
@@ -151,6 +157,9 @@ pub fn scan_skill_root(
         record.enabled = Some(enabled);
         record.trust_state = trust_state;
         record.is_effective = effective_state(enabled && has_required_name, trust_state);
+        if !has_required_name {
+            record.restrict_actions(ActionBlockedReason::MalformedSource);
+        }
         snapshot.records.push(record);
         ordinal += 1;
     }

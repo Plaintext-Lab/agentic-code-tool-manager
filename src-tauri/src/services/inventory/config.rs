@@ -1,6 +1,6 @@
 use super::models::{
-    effective_state, ClientKind, InventoryItemType, InventoryRecord, InventoryScope,
-    InventorySnapshot, InventoryWarning, SourceKind, TrustState,
+    effective_state, ActionBlockedReason, ClientKind, InventoryItemType, InventoryRecord,
+    InventoryScope, InventorySnapshot, InventoryWarning, SourceKind, TrustState,
 };
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -17,6 +17,10 @@ pub fn read_json(
     match serde_json::from_str(&content) {
         Ok(value) => Some(value),
         Err(_) => {
+            snapshot.restrict_source(
+                &path.display().to_string(),
+                ActionBlockedReason::MalformedSource,
+            );
             snapshot.warnings.push(InventoryWarning::new(
                 client,
                 path.display().to_string(),
@@ -36,6 +40,10 @@ pub fn read_toml(
     match toml::from_str(&content) {
         Ok(value) => Some(value),
         Err(_) => {
+            snapshot.restrict_source(
+                &path.display().to_string(),
+                ActionBlockedReason::MalformedSource,
+            );
             snapshot.warnings.push(InventoryWarning::new(
                 client,
                 path.display().to_string(),
@@ -54,7 +62,10 @@ fn read_config(
 ) -> Option<String> {
     let link_metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            snapshot.record_source_absence(path);
+            return None;
+        }
         Err(_) => {
             snapshot.warnings.push(InventoryWarning::new(
                 client,
@@ -70,16 +81,26 @@ fn read_config(
             if error.kind() == std::io::ErrorKind::NotFound
                 && link_metadata.file_type().is_symlink() =>
         {
-            snapshot.warnings.push(InventoryWarning::new(
+            snapshot.record_source_absence(path);
+            snapshot.restrict_source(
+                &path.display().to_string(),
+                ActionBlockedReason::BrokenSymlink,
+            );
+            snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 path.display().to_string(),
                 format!(
                     "Skipped this {format_name} configuration because its symlink target is unavailable."
                 ),
+                ActionBlockedReason::BrokenSymlink,
             ));
             return None;
         }
         Err(_) => {
+            snapshot.restrict_source(
+                &path.display().to_string(),
+                ActionBlockedReason::StateUnavailable,
+            );
             snapshot.warnings.push(InventoryWarning::new(
                 client,
                 path.display().to_string(),
@@ -89,6 +110,10 @@ fn read_config(
         }
     };
     if metadata.len() > MAX_CONFIG_BYTES {
+        snapshot.restrict_source(
+            &path.display().to_string(),
+            ActionBlockedReason::MalformedSource,
+        );
         snapshot.warnings.push(InventoryWarning::new(
             client,
             path.display().to_string(),
@@ -97,8 +122,15 @@ fn read_config(
         return None;
     }
     match std::fs::read_to_string(path) {
-        Ok(content) => Some(content),
+        Ok(content) => {
+            snapshot.record_source_revision(path, content.as_bytes());
+            Some(content)
+        }
         Err(_) => {
+            snapshot.restrict_source(
+                &path.display().to_string(),
+                ActionBlockedReason::StateUnavailable,
+            );
             snapshot.warnings.push(InventoryWarning::new(
                 client,
                 path.display().to_string(),
@@ -126,10 +158,11 @@ pub fn push_json_mcps(
 ) {
     for (ordinal, (name, value)) in servers.iter().enumerate() {
         let Some(config) = value.as_object() else {
-            snapshot.warnings.push(InventoryWarning::new(
+            snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 config_path.display().to_string(),
                 "Skipped an MCP entry because it is not an object.",
+                ActionBlockedReason::MalformedSource,
             ));
             continue;
         };
@@ -144,10 +177,11 @@ pub fn push_json_mcps(
             })
             .unwrap_or_else(|| !disabled_names.contains(name));
         let Some(detail) = json_transport_detail(config) else {
-            snapshot.warnings.push(InventoryWarning::new(
+            snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 config_path.display().to_string(),
                 "Skipped an MCP entry because it has no usable transport.",
+                ActionBlockedReason::MalformedSource,
             ));
             continue;
         };
@@ -166,6 +200,7 @@ pub fn push_json_mcps(
         record.enabled = Some(enabled);
         record.trust_state = trust_state;
         let approved = approved_names.is_none_or(|names| names.contains(name));
+        record.approval_pending = enabled && approved_names.is_some() && !approved;
         record.is_effective = if enabled && (!approved || policy_blocked_names.contains(name)) {
             Some(false)
         } else {
@@ -173,6 +208,9 @@ pub fn push_json_mcps(
         };
         record.protected_fields = json_protected_fields(config);
         record.detail = Some(detail.to_string());
+        if policy_blocked_names.contains(name) {
+            record.restrict_actions(ActionBlockedReason::PolicyControlled);
+        }
         snapshot.records.push(record);
     }
 }
@@ -194,10 +232,11 @@ pub fn push_toml_mcps(
     };
     for (ordinal, (name, value)) in servers.iter().enumerate() {
         let Some(server) = value.as_table() else {
-            snapshot.warnings.push(InventoryWarning::new(
+            snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 config_path.display().to_string(),
                 "Skipped an MCP entry because it is not a table.",
+                ActionBlockedReason::MalformedSource,
             ));
             continue;
         };
@@ -206,10 +245,11 @@ pub fn push_toml_mcps(
             .and_then(toml::Value::as_bool)
             .unwrap_or(true);
         let Some(detail) = toml_transport_detail(server) else {
-            snapshot.warnings.push(InventoryWarning::new(
+            snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 config_path.display().to_string(),
                 "Skipped an MCP entry because it has no usable transport.",
+                ActionBlockedReason::MalformedSource,
             ));
             continue;
         };

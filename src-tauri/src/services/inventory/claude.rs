@@ -2,8 +2,9 @@ use super::claude_policy::ClaudeManagedPolicy;
 use super::config::{push_json_mcps, read_json};
 use super::hooks::push_json_hooks;
 use super::models::{
-    AdapterCapabilities, ClientKind, DiscoveryContext, InventoryScope, InventorySnapshot,
-    SourceKind, TrustState,
+    source_action_blocker, ActionBlockedReason, AdapterCapabilities, ClientKind, DiscoveryContext,
+    InventoryActionCapabilities, InventoryItemType, InventoryRecord, InventoryScope,
+    InventorySnapshot, SourceKind, TrustState,
 };
 use super::skills::{discover_project_skill_roots, scan_skill_root};
 use super::ClientAdapter;
@@ -64,9 +65,75 @@ impl ClientAdapter for ClaudeAdapter {
                     && record.source_kind != SourceKind::ManagedConfig
                 {
                     record.is_effective = Some(false);
+                    record.restrict_actions(ActionBlockedReason::PolicyControlled);
                 }
             }
         }
+        if policy.allow_managed_hooks_only || policy.managed_hooks_enabled.is_some() {
+            for record in &mut snapshot.records {
+                if record.client == ClientKind::Claude
+                    && record.item_type == InventoryItemType::Hook
+                    && record.source_kind != SourceKind::ManagedConfig
+                {
+                    record.restrict_actions(ActionBlockedReason::PolicyControlled);
+                }
+            }
+        }
+    }
+
+    fn action_capabilities(
+        &self,
+        record: &InventoryRecord,
+        source_revision: String,
+    ) -> InventoryActionCapabilities {
+        if let Some(reason) = source_action_blocker(record) {
+            return InventoryActionCapabilities::blocked(reason, Some(source_revision));
+        }
+        if record.item_type == InventoryItemType::Mcp
+            && matches!(
+                record.source_kind,
+                SourceKind::UserConfig | SourceKind::ProjectConfig | SourceKind::LocalConfig
+            )
+        {
+            if record.approval_pending {
+                return InventoryActionCapabilities::pending_approval(
+                    true,
+                    super::models::ReloadGuidance::RestartClient,
+                    source_revision,
+                );
+            }
+            return InventoryActionCapabilities::stateful(
+                record.enabled,
+                true,
+                super::models::ReloadGuidance::RestartClient,
+                source_revision,
+            );
+        }
+        InventoryActionCapabilities::blocked(
+            ActionBlockedReason::UnsupportedByClient,
+            Some(source_revision),
+        )
+    }
+
+    fn action_revision_sources(
+        &self,
+        context: &DiscoveryContext,
+        record: &InventoryRecord,
+    ) -> Vec<String> {
+        let mut sources = vec![record.source_path.clone()];
+        if record.item_type == InventoryItemType::Mcp
+            && matches!(
+                record.source_kind,
+                SourceKind::UserConfig | SourceKind::ProjectConfig | SourceKind::LocalConfig
+            )
+        {
+            sources.push(context.claude_managed_settings_path.display().to_string());
+            sources.push(context.claude_managed_mcp_path.display().to_string());
+            if record.source_kind == SourceKind::ProjectConfig {
+                sources.push(context.home_dir.join(".claude.json").display().to_string());
+            }
+        }
+        sources
     }
 }
 
