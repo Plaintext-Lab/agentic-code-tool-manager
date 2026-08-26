@@ -1,3 +1,4 @@
+use super::codex_skill_config::codex_skill_config_match_count;
 use super::config::{push_toml_mcps, read_json, read_toml};
 use super::hooks::{push_codex_json_hooks, push_toml_hooks};
 use super::models::{
@@ -76,11 +77,14 @@ impl ClientAdapter for CodexAdapter {
             global_hooks_enabled,
             snapshot,
         );
-        if !codex_skill_config_is_editable(global_config.as_ref()) {
-            for record in snapshot.records.iter_mut().filter(|record| {
-                record.client == ClientKind::Codex
-                    && record.item_type == super::models::InventoryItemType::Skill
-            }) {
+        let skill_config_is_editable = codex_skill_config_is_editable(global_config.as_ref());
+        for record in snapshot.records.iter_mut().filter(|record| {
+            record.client == ClientKind::Codex
+                && record.item_type == super::models::InventoryItemType::Skill
+        }) {
+            if !skill_config_is_editable
+                || codex_skill_config_match_count(global_config.as_ref(), record) > 1
+            {
                 record.restrict_actions(ActionBlockedReason::MalformedSource);
             }
         }

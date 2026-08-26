@@ -3,6 +3,29 @@ use super::models::InventoryRecord;
 use std::path::{Path, PathBuf};
 use toml_edit::{value, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
+pub(super) fn codex_skill_config_match_count(
+    config: Option<&toml::Value>,
+    record: &InventoryRecord,
+) -> usize {
+    let aliases = skill_path_aliases(record);
+    config
+        .and_then(|value| value.get("skills"))
+        .and_then(|value| value.get("config"))
+        .and_then(toml::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .get("path")
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|path| configured_path_matches(Path::new(path), &aliases))
+                })
+                .count()
+        })
+        .unwrap_or_default()
+}
+
 pub(super) fn update_codex_skill_config(
     original: &[u8],
     record: &InventoryRecord,

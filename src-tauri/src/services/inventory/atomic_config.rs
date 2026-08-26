@@ -162,7 +162,10 @@ fn rollback_if_update_is_current(
     updated: &[u8],
 ) -> Result<(), ConfigWriteError> {
     let quarantine_path = sidecar_path(target_path, "rollback-current")?;
-    platform::restore_backup_if_matches(target_path, backup_path, updated, &quarantine_path)
+    let result =
+        platform::restore_backup_if_matches(target_path, backup_path, updated, &quarantine_path);
+    sync_parent(target_path);
+    result
 }
 
 fn sync_parent(target_path: &Path) {
@@ -191,9 +194,9 @@ pub(super) fn restore_original(
         None => {
             let quarantine_path = sidecar_path(&source.target_path, "rollback")
                 .map_err(|_| InventoryActionError::RollbackFailed)?;
-            platform::guarded_remove(&source.target_path, written, &quarantine_path)
-                .map_err(|_| InventoryActionError::RollbackFailed)?;
+            let result = platform::guarded_remove(&source.target_path, written, &quarantine_path);
             sync_parent(&source.target_path);
+            result.map_err(|_| InventoryActionError::RollbackFailed)?;
             Ok(())
         }
     }
@@ -321,6 +324,22 @@ mod tests {
         assert_eq!(fs::read(config_path).unwrap(), b"# newer save\n");
         assert!(!backup_path.exists());
         assert!(!quarantine_path.exists());
+    }
+
+    #[test]
+    fn keeps_quarantined_config_when_another_save_wins_the_restore_race() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        let quarantine_path = fixture.path().join(".config.rollback");
+        fs::write(&config_path, "# newest save\n").unwrap();
+        fs::write(&quarantine_path, "# quarantined save\n").unwrap();
+
+        let error = platform::restore_quarantine_without_overwrite(&quarantine_path, &config_path)
+            .unwrap_err();
+
+        assert_eq!(error, ConfigWriteError::RollbackFailed);
+        assert_eq!(fs::read(config_path).unwrap(), b"# newest save\n");
+        assert_eq!(fs::read(quarantine_path).unwrap(), b"# quarantined save\n");
     }
 
     #[cfg(unix)]

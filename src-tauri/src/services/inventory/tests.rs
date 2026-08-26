@@ -2013,6 +2013,32 @@ fn malformed_codex_skill_configuration_is_read_only() {
     assert_eq!(fs::read(config_path).unwrap(), original);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn ambiguous_codex_skill_configuration_is_read_only() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let skill_file = home.join(".agents/skills/ambiguous-config/SKILL.md");
+    write_skill(&skill_file);
+    let config = format!(
+        "[[skills.config]]\npath = {:?}\nenabled = true\n\n[[skills.config]]\npath = {:?}\nenabled = true\n",
+        skill_file.parent().unwrap().display().to_string(),
+        skill_file.display().to_string()
+    );
+    write(&codex_home.join("config.toml"), &config);
+
+    let initial = discover_inventory_with_codex_home(home, codex_home, Vec::new());
+    let actions = &codex_skill(&initial, "shared-skill", None).action_capabilities;
+
+    assert!(!actions.enable.available);
+    assert!(!actions.disable.available);
+    assert_eq!(
+        actions.disable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+}
+
 fn codex_skill<'a>(
     snapshot: &'a InventorySnapshot,
     name: &str,
