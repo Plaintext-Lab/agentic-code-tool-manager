@@ -1822,6 +1822,34 @@ fn codex_skill_action_accepts_an_inline_skills_table() {
 }
 
 #[test]
+fn codex_skill_action_handles_a_skill_directory_named_skill_md() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let skill_file = home.join(".agents/skills/SKILL.md/SKILL.md");
+    write_skill(&skill_file);
+    let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+    let record = codex_skill(&initial, "shared-skill", None);
+
+    let updated = set_inventory_record_enabled_with_paths(
+        home,
+        codex_home,
+        Vec::new(),
+        InventoryActionRequest {
+            record_id: record.id.clone(),
+            enabled: false,
+            source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        codex_skill(&updated, "shared-skill", None).enabled,
+        Some(false)
+    );
+}
+
+#[test]
 fn codex_skill_action_rejects_a_stale_inventory_revision_without_writing() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");

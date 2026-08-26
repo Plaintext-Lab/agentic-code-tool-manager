@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { invoke } from '@tauri-apps/api/core';
 import InventoryPage from '../../routes/inventory/+page.svelte';
+import { i18n } from '$lib/stores';
 import type { InventoryRecord, InventorySnapshot } from '$lib/types';
 
 const skill: InventoryRecord = {
@@ -97,5 +98,26 @@ describe('Inventory page skill actions', () => {
 		await waitFor(() => {
 			expect(screen.queryByText('Skill state was not changed')).not.toBeInTheDocument();
 		});
+	});
+
+	it('uses the localized fallback instead of an English backend error', async () => {
+		i18n.setLocale('zh-CN');
+		try {
+			vi.mocked(invoke).mockImplementation(async (command) => {
+				if (command === 'get_tool_inventory') return snapshot;
+				throw 'The inventory changed after it was scanned. Scan again and retry.';
+			});
+			render(InventoryPage);
+			await screen.findByText('toggle-me');
+
+			await fireEvent.click(screen.getByRole('button', { name: '禁用 toggle-me' }));
+			await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '禁用' }));
+
+			const alert = await screen.findByRole('alert');
+			expect(within(alert).getByText('无法更新技能。请重新扫描后再试。')).toBeInTheDocument();
+			expect(within(alert).queryByText(/inventory changed/i)).not.toBeInTheDocument();
+		} finally {
+			i18n.setLocale('en');
+		}
 	});
 });

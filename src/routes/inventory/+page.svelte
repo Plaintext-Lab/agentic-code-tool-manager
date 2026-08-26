@@ -89,7 +89,7 @@
 			actionRecord = null;
 		} catch (caught) {
 			console.error('[Inventory] Skill state update failed:', caught);
-			actionError = typeof caught === 'string' ? caught : i18n.t('inventory.actionErrorFallback');
+			actionError = i18n.t('inventory.actionErrorFallback');
 			actionRecord = null;
 		} finally {
 			actionLoading = false;

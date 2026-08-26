@@ -207,7 +207,9 @@ pub fn codex_disabled_skill_paths(config: Option<&toml::Value>) -> HashSet<Strin
 }
 
 fn skill_config_path_candidates(path: &Path) -> Vec<PathBuf> {
-    if path.file_name().is_some_and(|name| name == "SKILL.md") {
+    if path.is_dir() {
+        vec![path.to_path_buf(), path.join("SKILL.md")]
+    } else if path.file_name().is_some_and(|name| name == "SKILL.md") {
         vec![path.to_path_buf()]
     } else {
         vec![path.to_path_buf(), path.join("SKILL.md")]

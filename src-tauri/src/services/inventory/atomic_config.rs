@@ -1,4 +1,5 @@
 use super::actions::InventoryActionError;
+use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -72,12 +73,7 @@ impl ConfigWriter for AtomicConfigWriter {
         }
         let parent = source.target_path.parent().ok_or(ConfigWriteError::Io)?;
         fs::create_dir_all(parent).map_err(|_| ConfigWriteError::Io)?;
-        let file_name = source
-            .target_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or(ConfigWriteError::Io)?;
-        let temp_path = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
+        let temp_path = sidecar_path(&source.target_path, "tmp")?;
         let result = write_and_replace(&temp_path, &source.target_path, source, updated);
         if result.is_err() {
             let _ = fs::remove_file(&temp_path);
@@ -133,14 +129,7 @@ fn replace_existing_guarded(
     source: &ConfigSource,
     updated: &[u8],
 ) -> Result<(), ConfigWriteError> {
-    let backup_path = target_path.with_file_name(format!(
-        ".{}.{}.backup",
-        target_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or(ConfigWriteError::Io)?,
-        Uuid::new_v4()
-    ));
+    let backup_path = sidecar_path(target_path, "backup")?;
     platform::replace_existing(target_path, temp_path, &backup_path)?;
     let replaced = match fs::read(&backup_path) {
         Ok(replaced) => replaced,
@@ -160,6 +149,17 @@ fn replace_existing_guarded(
     rollback_if_update_is_current(target_path, &backup_path, updated)?;
     sync_parent(target_path);
     Err(ConfigWriteError::SourceChanged)
+}
+
+fn sidecar_path(target_path: &Path, suffix: &str) -> Result<PathBuf, ConfigWriteError> {
+    let file_name = target_path.file_name().ok_or(ConfigWriteError::Io)?;
+    let mut sidecar_name = OsString::from(".");
+    sidecar_name.push(file_name);
+    sidecar_name.push(".");
+    sidecar_name.push(Uuid::new_v4().to_string());
+    sidecar_name.push(".");
+    sidecar_name.push(suffix);
+    Ok(target_path.with_file_name(sidecar_name))
 }
 
 fn rollback_if_update_is_current(
@@ -302,6 +302,25 @@ mod tests {
             xattr::get(config_path, attribute).unwrap().unwrap(),
             b"protected"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn creates_a_sidecar_name_for_a_non_utf8_config_target() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let target_name = OsString::from_vec(b"config-\xff.toml".to_vec());
+        let config_target = PathBuf::from(target_name);
+
+        let sidecar = sidecar_path(&config_target, "tmp").unwrap();
+
+        assert!(sidecar
+            .file_name()
+            .unwrap()
+            .as_bytes()
+            .windows(b"config-\xff.toml".len())
+            .any(|window| window == b"config-\xff.toml"));
     }
 
     #[test]
