@@ -80,4 +80,22 @@ describe('Inventory page skill actions', () => {
 		expect(screen.getByText('toggle-me')).toBeInTheDocument();
 		expect(screen.getByText('Enabled')).toBeInTheDocument();
 	});
+
+	it('clears old action banners when a fresh scan succeeds', async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === 'get_tool_inventory') return snapshot;
+			throw 'The inventory changed after it was scanned. Scan again and retry.';
+		});
+		render(InventoryPage);
+		await screen.findByText('toggle-me');
+		await fireEvent.click(screen.getByRole('button', { name: 'Disable toggle-me' }));
+		await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Disable' }));
+		const alert = await screen.findByRole('alert');
+
+		await fireEvent.click(within(alert).getByRole('button', { name: 'Scan again' }));
+
+		await waitFor(() => {
+			expect(screen.queryByText('Skill state was not changed')).not.toBeInTheDocument();
+		});
+	});
 });

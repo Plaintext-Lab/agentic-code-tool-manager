@@ -44,6 +44,8 @@
 		if ((loading && snapshot) || actionLoading) return;
 		loading = true;
 		error = null;
+		actionError = null;
+		actionSuccess = null;
 		try {
 			snapshot = await invoke<InventorySnapshot>('get_tool_inventory');
 		} catch (caught) {

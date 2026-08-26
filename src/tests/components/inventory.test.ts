@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import InventoryActionDialog from '$lib/components/inventory/InventoryActionDialog.svelte';
 import InventoryTable from '$lib/components/inventory/InventoryTable.svelte';
 import InventoryWarningList from '$lib/components/inventory/InventoryWarningList.svelte';
@@ -319,5 +319,21 @@ describe('InventoryActionDialog', () => {
 
 		expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
 		expect(screen.getByRole('button', { name: 'Disabling…' })).toBeDisabled();
+	});
+
+	it('keeps keyboard focus inside the dialog while submitting', async () => {
+		const props = {
+			record: { ...baseRecord, itemType: 'skill' as const, name: 'focus-skill' },
+			enabled: false,
+			submitting: false,
+			onConfirm: () => undefined,
+			onCancel: () => undefined
+		};
+		const view = render(InventoryActionDialog, { props });
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
+
+		await view.rerender({ ...props, submitting: true });
+
+		await waitFor(() => expect(screen.getByRole('document')).toHaveFocus());
 	});
 });

@@ -25,12 +25,17 @@
 	const actionName = $derived(i18n.t(enabled ? 'common.enable' : 'common.disable'));
 	const title = $derived(i18n.t(enabled ? 'inventory.enableSkillTitle' : 'inventory.disableSkillTitle'));
 	let dialogElement = $state<HTMLDivElement>();
+	let focusTarget = $state<HTMLDivElement>();
 	let previouslyFocused: HTMLElement | null = null;
 
 	$effect(() => {
 		previouslyFocused = document.activeElement as HTMLElement;
 		tick().then(() => dialogElement?.querySelector<HTMLButtonElement>('[data-cancel]')?.focus());
 		return () => previouslyFocused?.focus();
+	});
+
+	$effect(() => {
+		if (submitting) tick().then(() => focusTarget?.focus());
 	});
 
 	function cancel() {
@@ -44,7 +49,11 @@
 		}
 		if (event.key !== 'Tab') return;
 		const focusable = dialogElement?.querySelectorAll<HTMLElement>('button:not([disabled])');
-		if (!focusable || focusable.length === 0) return;
+		if (!focusable || focusable.length === 0) {
+			event.preventDefault();
+			focusTarget?.focus();
+			return;
+		}
 		const first = focusable[0];
 		const last = focusable[focusable.length - 1];
 		if (event.shiftKey && document.activeElement === first) {
@@ -58,6 +67,7 @@
 </script>
 
 <div
+	bind:this={dialogElement}
 	class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
 	role="dialog"
 	aria-modal="true"
@@ -70,9 +80,10 @@
 	onkeydown={handleKeydown}
 >
 	<div
-		bind:this={dialogElement}
+		bind:this={focusTarget}
 		class="mx-4 w-full max-w-lg rounded-xl bg-white p-6 shadow-xl dark:bg-gray-800"
 		role="document"
+		tabindex="-1"
 	>
 		<div class="flex items-start gap-3">
 			<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/50">

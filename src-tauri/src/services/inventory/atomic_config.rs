@@ -110,8 +110,41 @@ fn write_and_replace(
             .set_permissions(permissions)
             .map_err(|_| ConfigWriteError::Io)?;
     }
-    fs::rename(temp_path, target_path).map_err(|_| ConfigWriteError::Io)?;
+    replace_file(temp_path, target_path)?;
     sync_parent(target_path);
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file(temp_path: &Path, target_path: &Path) -> Result<(), ConfigWriteError> {
+    fs::rename(temp_path, target_path).map_err(|_| ConfigWriteError::Io)
+}
+
+#[cfg(windows)]
+fn replace_file(temp_path: &Path, target_path: &Path) -> Result<(), ConfigWriteError> {
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source: Vec<u16> = temp_path.as_os_str().encode_wide().chain(once(0)).collect();
+    let destination: Vec<u16> = target_path
+        .as_os_str()
+        .encode_wide()
+        .chain(once(0))
+        .collect();
+    // SAFETY: Both pointers reference NUL-terminated buffers that remain alive for the call.
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        return Err(ConfigWriteError::Io);
+    }
     Ok(())
 }
 
@@ -199,5 +232,19 @@ mod tests {
 
         assert_eq!(error, ConfigWriteError::SourceChanged);
         assert_eq!(fs::read(config_path).unwrap(), b"# changed elsewhere\n");
+    }
+
+    #[test]
+    fn atomically_replaces_an_existing_config() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        fs::write(&config_path, "# original\n").unwrap();
+        let source = ConfigSource::read(&config_path).unwrap();
+
+        AtomicConfigWriter
+            .replace(&source, b"# replacement\n")
+            .unwrap();
+
+        assert_eq!(fs::read(config_path).unwrap(), b"# replacement\n");
     }
 }
