@@ -318,6 +318,37 @@ fn codex_boundary_blocks_administrator_and_broken_link_sources() {
 }
 
 #[test]
+fn codex_skill_toggle_availability_matches_the_macos_scope() {
+    let mut skill = InventoryRecord::new(
+        ClientKind::Codex,
+        InventoryItemType::Skill,
+        "platform-scoped-skill".to_string(),
+        InventoryScope::User,
+        SourceKind::UserSkills,
+        "/tmp/platform-scoped-skill/SKILL.md".to_string(),
+        None,
+        0,
+        100,
+    );
+    skill.enabled = Some(true);
+    skill.is_effective = Some(true);
+
+    let actions = CodexAdapter.action_capabilities(&skill, "sha256:platform-scope".to_string());
+
+    if cfg!(target_os = "macos") {
+        assert!(actions.disable.available);
+        assert_eq!(actions.disable.blocked_reason, None);
+    } else {
+        assert!(!actions.enable.available);
+        assert!(!actions.disable.available);
+        assert_eq!(
+            actions.disable.blocked_reason,
+            Some(ActionBlockedReason::UnsupportedByClient)
+        );
+    }
+}
+
+#[test]
 fn reports_malformed_and_plugin_owned_records_as_read_only() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");
@@ -1616,6 +1647,7 @@ fn symlinked_skills_resolve_and_cycles_become_warnings() {
     }));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn codex_skill_action_disables_with_native_config_and_fresh_read_back() {
     let fixture = TempDir::new().unwrap();
@@ -1686,6 +1718,7 @@ fn codex_skill_action_disables_with_native_config_and_fresh_read_back() {
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn codex_skill_action_targets_one_duplicate_source_only() {
     let fixture = TempDir::new().unwrap();
@@ -1722,7 +1755,7 @@ fn codex_skill_action_targets_one_duplicate_source_only() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 #[test]
 fn codex_skill_action_keeps_distinct_symlink_sources_separate() {
     use std::os::unix::fs::symlink;
@@ -1780,6 +1813,7 @@ fn codex_skill_action_keeps_distinct_symlink_sources_separate() {
     assert!(!config.contains(&skills_root.join("alias-b").display().to_string()));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn codex_skill_action_accepts_an_inline_skills_table() {
     let fixture = TempDir::new().unwrap();
@@ -1821,6 +1855,7 @@ fn codex_skill_action_accepts_an_inline_skills_table() {
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn codex_skill_action_handles_a_skill_directory_named_skill_md() {
     let fixture = TempDir::new().unwrap();
@@ -1849,6 +1884,7 @@ fn codex_skill_action_handles_a_skill_directory_named_skill_md() {
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn codex_skill_action_rejects_a_stale_inventory_revision_without_writing() {
     let fixture = TempDir::new().unwrap();
@@ -1879,7 +1915,7 @@ fn codex_skill_action_rejects_a_stale_inventory_revision_without_writing() {
     assert!(!codex_home.join("config.toml").exists());
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 #[test]
 fn codex_skill_action_preserves_config_symlink_and_permissions() {
     use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
@@ -1952,6 +1988,7 @@ fn codex_skill_action_rejects_non_skill_records_without_exposing_config() {
     assert!(!error.to_string().contains("DO_NOT_EXPOSE"));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn codex_skill_action_rejects_malformed_native_entries_without_writing() {
     let fixture = TempDir::new().unwrap();

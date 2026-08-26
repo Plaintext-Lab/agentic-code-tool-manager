@@ -126,6 +126,9 @@ fn validate_request(
     if record.client != ClientKind::Codex || record.item_type != InventoryItemType::Skill {
         return Err(InventoryActionError::UnsupportedRecord);
     }
+    if !cfg!(target_os = "macos") {
+        return Err(InventoryActionError::UnsupportedRecord);
+    }
     if record.action_capabilities.source_revision.as_deref()
         != Some(request.source_revision.as_str())
     {
@@ -142,7 +145,7 @@ fn validate_request(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
     use std::fs;

@@ -83,6 +83,13 @@ impl ClientAdapter for CodexAdapter {
         if let Some(reason) = source_action_blocker(record) {
             return InventoryActionCapabilities::blocked(reason, Some(source_revision));
         }
+        if record.item_type == super::models::InventoryItemType::Skill && !cfg!(target_os = "macos")
+        {
+            return InventoryActionCapabilities::blocked(
+                ActionBlockedReason::UnsupportedByClient,
+                Some(source_revision),
+            );
+        }
         if matches!(
             record.source_kind,
             SourceKind::UserConfig
