@@ -11,8 +11,12 @@
 		InventorySourceKind
 	} from '$lib/types';
 
-	type Props = { records: InventoryRecord[] };
-	let { records }: Props = $props();
+	type Props = {
+		records: InventoryRecord[];
+		busyRecordId?: string | null;
+		onAction?: (record: InventoryRecord, enabled: boolean) => void;
+	};
+	let { records, busyRecordId = null, onAction }: Props = $props();
 
 	const itemLabels: Record<InventoryItemType, TranslationKey> = {
 		skill: 'inventory.skill',
@@ -74,6 +78,13 @@
 		const reason = enable.blockedReason ?? disable.blockedReason ?? 'stateUnavailable';
 		return i18n.t(blockedReasonLabels[reason], { client: inventoryClientLabels[record.client] });
 	}
+
+	function desiredState(record: InventoryRecord): boolean | null {
+		if (record.client !== 'codex' || record.itemType !== 'skill') return null;
+		if (record.actionCapabilities.enable.available) return true;
+		if (record.actionCapabilities.disable.available) return false;
+		return null;
+	}
 </script>
 
 <div class="card overflow-hidden p-0">
@@ -89,6 +100,7 @@
 			</thead>
 			<tbody class="divide-y divide-gray-200 dark:divide-gray-700">
 				{#each records as record (record.id)}
+					{@const desired = desiredState(record)}
 					<tr class="align-top text-gray-700 dark:text-gray-300">
 						<td class="px-4 py-4">
 							<div class="font-medium text-gray-900 dark:text-white">{record.name}</div>
@@ -130,6 +142,23 @@
 								</div>
 							{/if}
 							<div class="mt-2 text-xs text-gray-500 dark:text-gray-400">{actionLabel(record)}</div>
+							{#if desired !== null && onAction}
+								<button
+									class="btn btn-secondary mt-3"
+									disabled={busyRecordId === record.id}
+									aria-label={i18n.t(
+										busyRecordId === record.id
+											? (desired ? 'inventory.enablingNamed' : 'inventory.disablingNamed')
+											: (desired ? 'inventory.enableNamed' : 'inventory.disableNamed'),
+										{ name: record.name }
+									)}
+									onclick={() => onAction?.(record, desired)}
+								>
+									{busyRecordId === record.id
+										? i18n.t(desired ? 'inventory.enabling' : 'inventory.disabling')
+										: i18n.t(desired ? 'common.enable' : 'common.disable')}
+								</button>
+							{/if}
 						</td>
 					</tr>
 				{/each}

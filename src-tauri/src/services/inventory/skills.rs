@@ -199,12 +199,22 @@ pub fn codex_disabled_skill_paths(config: Option<&toml::Value>) -> HashSet<Strin
             continue;
         };
         let path = PathBuf::from(path);
-        disabled.insert(path.display().to_string());
-        if let Ok(resolved) = std::fs::canonicalize(&path) {
-            disabled.insert(resolved.display().to_string());
+        for candidate in skill_config_path_candidates(&path) {
+            disabled.insert(candidate.display().to_string());
+            if let Ok(resolved) = std::fs::canonicalize(&candidate) {
+                disabled.insert(resolved.display().to_string());
+            }
         }
     }
     disabled
+}
+
+fn skill_config_path_candidates(path: &Path) -> Vec<PathBuf> {
+    if path.file_name().is_some_and(|name| name == "SKILL.md") {
+        vec![path.to_path_buf()]
+    } else {
+        vec![path.to_path_buf(), path.join("SKILL.md")]
+    }
 }
 
 fn parse_frontmatter_name(content: &str) -> Option<String> {

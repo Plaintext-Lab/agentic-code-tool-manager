@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
+import InventoryActionDialog from '$lib/components/inventory/InventoryActionDialog.svelte';
 import InventoryTable from '$lib/components/inventory/InventoryTable.svelte';
 import InventoryWarningList from '$lib/components/inventory/InventoryWarningList.svelte';
 import { i18n } from '$lib/i18n';
@@ -33,6 +34,45 @@ const baseRecord: InventoryRecord = {
 };
 
 describe('InventoryTable', () => {
+	it('offers the eligible Codex skill action and passes only the discovered record', async () => {
+		const actions: Array<{ record: InventoryRecord; enabled: boolean }> = [];
+		const skill = {
+			...baseRecord,
+			id: 'codex:skill:user:toggle-me',
+			itemType: 'skill' as const,
+			name: 'toggle-me',
+			sourceKind: 'userSkills' as const,
+			sourcePath: '/Users/test/.agents/skills/toggle-me/SKILL.md',
+			originalPath: '/Users/test/.agents/skills/toggle-me/SKILL.md'
+		};
+		render(InventoryTable, {
+			props: {
+				records: [skill, baseRecord],
+				onAction: (record: InventoryRecord, enabled: boolean) => actions.push({ record, enabled })
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Disable toggle-me' }));
+
+		expect(actions).toEqual([{ record: skill, enabled: false }]);
+		expect(screen.queryByRole('button', { name: 'Disable docs' })).not.toBeInTheDocument();
+	});
+
+	it('prevents a duplicate Codex skill action while its request is running', () => {
+		const skill = {
+			...baseRecord,
+			id: 'codex:skill:user:busy',
+			itemType: 'skill' as const,
+			name: 'busy-skill',
+			sourceKind: 'userSkills' as const
+		};
+		render(InventoryTable, {
+			props: { records: [skill], busyRecordId: skill.id, onAction: () => undefined }
+		});
+
+		expect(screen.getByRole('button', { name: 'Disabling busy-skill' })).toBeDisabled();
+	});
+
 	it('shows tool provenance without rendering protected values', () => {
 		render(InventoryTable, { props: { records: [baseRecord] } });
 
@@ -231,5 +271,53 @@ describe('InventoryTable', () => {
 		} finally {
 			i18n.setLocale('en');
 		}
+	});
+});
+
+describe('InventoryActionDialog', () => {
+	it('confirms the exact client, scope, project, state, and safe source location', () => {
+		const projectSkill: InventoryRecord = {
+			...baseRecord,
+			id: 'codex:skill:project:toggle-me',
+			itemType: 'skill',
+			name: 'toggle-me',
+			scope: 'project',
+			sourceKind: 'projectSkills',
+			projectPath: '/Users/test/project',
+			sourcePath: '/Users/test/project/.agents/skills/toggle-me/SKILL.md',
+			originalPath: '/Users/test/project/.agents/skills/toggle-me/SKILL.md'
+		};
+		render(InventoryActionDialog, {
+			props: {
+				record: projectSkill,
+				enabled: false,
+				submitting: false,
+				onConfirm: () => undefined,
+				onCancel: () => undefined
+			}
+		});
+
+		const dialog = screen.getByRole('dialog', { name: 'Disable Codex skill' });
+		expect(within(dialog).getByText('toggle-me')).toBeInTheDocument();
+		expect(within(dialog).getByText('Codex')).toBeInTheDocument();
+		expect(within(dialog).getByText('Project scope')).toBeInTheDocument();
+		expect(within(dialog).getByText('/Users/test/project')).toBeInTheDocument();
+		expect(within(dialog).getByText('Disabled')).toBeInTheDocument();
+		expect(within(dialog).getByText(projectSkill.sourcePath)).toBeInTheDocument();
+	});
+
+	it('disables both dialog actions while the update is running', () => {
+		render(InventoryActionDialog, {
+			props: {
+				record: { ...baseRecord, itemType: 'skill', name: 'busy-skill' },
+				enabled: false,
+				submitting: true,
+				onConfirm: () => undefined,
+				onCancel: () => undefined
+			}
+		});
+
+		expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+		expect(screen.getByRole('button', { name: 'Disabling…' })).toBeDisabled();
 	});
 });
