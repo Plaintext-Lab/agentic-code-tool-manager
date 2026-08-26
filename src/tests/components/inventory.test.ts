@@ -336,4 +336,19 @@ describe('InventoryActionDialog', () => {
 
 		await waitFor(() => expect(screen.getByRole('document')).toHaveFocus());
 	});
+
+	it('keeps the confirmation controls reachable in a short viewport', () => {
+		render(InventoryActionDialog, {
+			props: {
+				record: { ...baseRecord, itemType: 'skill', name: 'scroll-skill' },
+				enabled: false,
+				submitting: false,
+				onConfirm: () => undefined,
+				onCancel: () => undefined
+			}
+		});
+
+		expect(screen.getByRole('dialog')).toHaveClass('overflow-y-auto');
+		expect(screen.getByRole('document')).toHaveClass('max-h-[calc(100dvh-2rem)]', 'overflow-y-auto');
+	});
 });

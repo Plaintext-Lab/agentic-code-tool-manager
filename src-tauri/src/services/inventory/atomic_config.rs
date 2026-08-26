@@ -161,16 +161,8 @@ fn rollback_if_update_is_current(
     backup_path: &Path,
     updated: &[u8],
 ) -> Result<(), ConfigWriteError> {
-    let target_still_contains_update = fs::read(target_path)
-        .map(|contents| contents == updated)
-        .unwrap_or(false);
-    if target_still_contains_update {
-        platform::restore_backup(target_path, backup_path)?;
-    }
-    if backup_path.exists() {
-        fs::remove_file(backup_path).map_err(|_| ConfigWriteError::RollbackFailed)?;
-    }
-    Ok(())
+    let quarantine_path = sidecar_path(target_path, "rollback-current")?;
+    platform::restore_backup_if_matches(target_path, backup_path, updated, &quarantine_path)
 }
 
 fn sync_parent(target_path: &Path) {
@@ -284,6 +276,51 @@ mod tests {
 
         assert_eq!(error, ConfigWriteError::SourceChanged);
         assert_eq!(fs::read(config_path).unwrap(), b"# concurrent edit\n");
+    }
+
+    #[test]
+    fn restores_a_backup_only_when_the_current_config_is_our_update() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        let backup_path = fixture.path().join(".config.backup");
+        let quarantine_path = fixture.path().join(".config.rollback-current");
+        fs::write(&config_path, "# requested\n").unwrap();
+        fs::write(&backup_path, "# original\n").unwrap();
+
+        platform::restore_backup_if_matches(
+            &config_path,
+            &backup_path,
+            b"# requested\n",
+            &quarantine_path,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(config_path).unwrap(), b"# original\n");
+        assert!(!backup_path.exists());
+        assert!(!quarantine_path.exists());
+    }
+
+    #[test]
+    fn never_replaces_a_newer_config_during_backup_restore() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        let backup_path = fixture.path().join(".config.backup");
+        let quarantine_path = fixture.path().join(".config.rollback-current");
+        fs::write(&config_path, "# newer save\n").unwrap();
+        fs::write(&backup_path, "# original\n").unwrap();
+
+        let error = platform::restore_backup_if_matches(
+            &config_path,
+            &backup_path,
+            b"# requested\n",
+            &quarantine_path,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ConfigWriteError::RollbackFailed);
+        assert_eq!(fs::read(config_path).unwrap(), b"# newer save\n");
+        assert!(!backup_path.exists());
+        assert!(!quarantine_path.exists());
     }
 
     #[cfg(unix)]

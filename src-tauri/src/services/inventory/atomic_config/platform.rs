@@ -45,13 +45,51 @@ pub(super) fn replace_existing(
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn restore_backup(target: &Path, backup: &Path) -> Result<(), ConfigWriteError> {
-    exchange_files(backup, target).map_err(|_| ConfigWriteError::RollbackFailed)
+pub(super) fn commit_new(replacement: &Path, target: &Path) -> Result<(), ConfigWriteError> {
+    rename_exclusive(replacement, target)
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn commit_new(replacement: &Path, target: &Path) -> Result<(), ConfigWriteError> {
-    rename_exclusive(replacement, target)
+pub(super) fn restore_backup_if_matches(
+    target: &Path,
+    backup: &Path,
+    expected: &[u8],
+    quarantine: &Path,
+) -> Result<(), ConfigWriteError> {
+    std::fs::rename(target, quarantine).map_err(|_| ConfigWriteError::RollbackFailed)?;
+    let displaced_matches = std::fs::read(quarantine)
+        .as_deref()
+        .is_ok_and(|contents| contents == expected);
+
+    if displaced_matches {
+        match rename_exclusive(backup, target) {
+            Ok(()) => {
+                return std::fs::remove_file(quarantine)
+                    .map_err(|_| ConfigWriteError::RollbackFailed);
+            }
+            Err(ConfigWriteError::SourceChanged) => {
+                let _ = std::fs::remove_file(quarantine);
+                let _ = std::fs::remove_file(backup);
+                return Err(ConfigWriteError::RollbackFailed);
+            }
+            Err(_) => {
+                let _ = rename_exclusive(quarantine, target);
+                return Err(ConfigWriteError::RollbackFailed);
+            }
+        }
+    }
+
+    match rename_exclusive(quarantine, target) {
+        Ok(()) => {
+            std::fs::remove_file(backup).map_err(|_| ConfigWriteError::RollbackFailed)?;
+        }
+        Err(ConfigWriteError::SourceChanged) => {
+            let _ = std::fs::remove_file(quarantine);
+            let _ = std::fs::remove_file(backup);
+        }
+        Err(_) => return Err(ConfigWriteError::RollbackFailed),
+    }
+    Err(ConfigWriteError::RollbackFailed)
 }
 
 #[cfg(target_os = "macos")]
@@ -131,13 +169,18 @@ pub(super) fn replace_existing(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(super) fn restore_backup(_target: &Path, _backup: &Path) -> Result<(), ConfigWriteError> {
-    Err(ConfigWriteError::RollbackFailed)
+pub(super) fn commit_new(_replacement: &Path, _target: &Path) -> Result<(), ConfigWriteError> {
+    Err(ConfigWriteError::Io)
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(super) fn commit_new(_replacement: &Path, _target: &Path) -> Result<(), ConfigWriteError> {
-    Err(ConfigWriteError::Io)
+pub(super) fn restore_backup_if_matches(
+    _target: &Path,
+    _backup: &Path,
+    _expected: &[u8],
+    _quarantine: &Path,
+) -> Result<(), ConfigWriteError> {
+    Err(ConfigWriteError::RollbackFailed)
 }
 
 #[cfg(not(target_os = "macos"))]

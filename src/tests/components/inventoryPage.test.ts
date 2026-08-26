@@ -120,4 +120,27 @@ describe('Inventory page skill actions', () => {
 			i18n.setLocale('en');
 		}
 	});
+
+	it('blocks skill actions while a rescan is running', async () => {
+		let finishRescan: ((value: InventorySnapshot) => void) | undefined;
+		let inventoryCalls = 0;
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command !== 'get_tool_inventory') throw new Error(`Unexpected command: ${command}`);
+			inventoryCalls += 1;
+			if (inventoryCalls === 1) return snapshot;
+			return new Promise<InventorySnapshot>((resolve) => {
+				finishRescan = resolve;
+			});
+		});
+		render(InventoryPage);
+		await screen.findByText('toggle-me');
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Scan inventory again' }));
+
+		const action = screen.getByRole('button', { name: 'Disable toggle-me' });
+		expect(action).toBeDisabled();
+		await fireEvent.click(action);
+		expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+		finishRescan?.(snapshot);
+	});
 });

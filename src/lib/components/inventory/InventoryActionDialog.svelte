@@ -68,7 +68,7 @@
 
 <div
 	bind:this={dialogElement}
-	class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+	class="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-4"
 	role="dialog"
 	aria-modal="true"
 	aria-labelledby="inventory-action-title"
@@ -81,7 +81,7 @@
 >
 	<div
 		bind:this={focusTarget}
-		class="mx-4 w-full max-w-lg rounded-xl bg-white p-6 shadow-xl dark:bg-gray-800"
+		class="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl dark:bg-gray-800"
 		role="document"
 		tabindex="-1"
 	>

@@ -14,9 +14,10 @@
 	type Props = {
 		records: InventoryRecord[];
 		busyRecordId?: string | null;
+		actionsDisabled?: boolean;
 		onAction?: (record: InventoryRecord, enabled: boolean) => void;
 	};
-	let { records, busyRecordId = null, onAction }: Props = $props();
+	let { records, busyRecordId = null, actionsDisabled = false, onAction }: Props = $props();
 
 	const itemLabels: Record<InventoryItemType, TranslationKey> = {
 		skill: 'inventory.skill',
@@ -145,7 +146,7 @@
 							{#if desired !== null && onAction}
 								<button
 									class="btn btn-secondary mt-3"
-									disabled={busyRecordId === record.id}
+									disabled={actionsDisabled || busyRecordId === record.id}
 									aria-label={i18n.t(
 										busyRecordId === record.id
 											? (desired ? 'inventory.enablingNamed' : 'inventory.disablingNamed')

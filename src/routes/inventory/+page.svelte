@@ -57,7 +57,7 @@
 	}
 
 	function requestAction(record: InventoryRecord, enabled: boolean) {
-		if (actionLoading) return;
+		if (loading || actionLoading) return;
 		actionError = null;
 		actionSuccess = null;
 		actionRecord = record;
@@ -184,7 +184,12 @@
 						<span>{i18n.t('inventory.toolsCount', { shown: filteredRecords.length, total: snapshot.records.length })}</span>
 						<span>{i18n.t(snapshot.scannedProjectCount === 1 ? 'inventory.projectScanned' : 'inventory.projectsScanned', { count: snapshot.scannedProjectCount })}</span>
 					</div>
-					<InventoryTable records={filteredRecords} busyRecordId={actionLoading ? actionRecord?.id : null} onAction={requestAction} />
+					<InventoryTable
+						records={filteredRecords}
+						busyRecordId={actionLoading ? actionRecord?.id : null}
+						actionsDisabled={loading || actionLoading}
+						onAction={requestAction}
+					/>
 				{/if}
 			{/if}
 		{/if}
