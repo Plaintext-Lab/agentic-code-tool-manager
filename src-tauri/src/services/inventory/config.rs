@@ -198,6 +198,7 @@ pub fn push_json_mcps(
         record.enabled = Some(enabled);
         record.trust_state = trust_state;
         let approved = approved_names.is_none_or(|names| names.contains(name));
+        record.approval_pending = enabled && approved_names.is_some() && !approved;
         record.is_effective = if enabled && (!approved || policy_blocked_names.contains(name)) {
             Some(false)
         } else {

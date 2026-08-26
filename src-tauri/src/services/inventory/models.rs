@@ -171,6 +171,21 @@ impl InventoryActionCapabilities {
         }
     }
 
+    /// Reports native actions when an enabled definition is waiting for client approval.
+    pub fn pending_approval(
+        confirmation_required: bool,
+        reload_guidance: ReloadGuidance,
+        source_revision: String,
+    ) -> Self {
+        Self {
+            enable: ActionAvailability::available(),
+            disable: ActionAvailability::available(),
+            confirmation_required,
+            reload_guidance,
+            source_revision: Some(source_revision),
+        }
+    }
+
     /// Reports why neither native action can be offered safely.
     pub fn blocked(reason: ActionBlockedReason, source_revision: Option<String>) -> Self {
         Self {
@@ -226,6 +241,8 @@ pub struct InventoryRecord {
     pub action_capabilities: InventoryActionCapabilities,
     #[serde(skip)]
     pub(crate) action_restriction: Option<ActionBlockedReason>,
+    #[serde(skip)]
+    pub(crate) approval_pending: bool,
 }
 
 impl InventoryRecord {
@@ -275,6 +292,7 @@ impl InventoryRecord {
                 None,
             ),
             action_restriction: None,
+            approval_pending: false,
         }
     }
 

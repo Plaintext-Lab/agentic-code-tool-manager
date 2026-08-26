@@ -895,6 +895,9 @@ fn pending_claude_project_mcp_is_not_effective() {
     assert_eq!(approved.is_effective, Some(true));
     assert_eq!(pending.enabled, Some(true));
     assert_eq!(pending.is_effective, Some(false));
+    assert!(pending.action_capabilities.enable.available);
+    assert_eq!(pending.action_capabilities.enable.blocked_reason, None);
+    assert!(pending.action_capabilities.disable.available);
     assert_eq!(automatically_approved.is_effective, Some(true));
 }
 

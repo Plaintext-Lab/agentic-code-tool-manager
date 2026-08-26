@@ -95,6 +95,13 @@ impl ClientAdapter for ClaudeAdapter {
                 SourceKind::UserConfig | SourceKind::ProjectConfig | SourceKind::LocalConfig
             )
         {
+            if record.approval_pending {
+                return InventoryActionCapabilities::pending_approval(
+                    true,
+                    super::models::ReloadGuidance::RestartClient,
+                    source_revision,
+                );
+            }
             return InventoryActionCapabilities::stateful(
                 record.enabled,
                 true,
