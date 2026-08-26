@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { AlertTriangle } from 'lucide-svelte';
-	import { blockedReasonLabels } from '$lib/inventory/actionLabels';
+	import { blockedReasonLabels, inventoryClientLabels } from '$lib/inventory/actionLabels';
 	import { i18n } from '$lib/stores';
 	import type { InventoryWarning } from '$lib/types';
 
@@ -10,12 +10,8 @@
 	function warningLabel(warning: InventoryWarning): string {
 		if (!warning.blockedReason) return warning.message;
 		return i18n.t(blockedReasonLabels[warning.blockedReason], {
-			client: warning.client ? clientLabel(warning.client) : ''
+			client: warning.client ? inventoryClientLabels[warning.client] : ''
 		});
-	}
-
-	function clientLabel(client: NonNullable<InventoryWarning['client']>): string {
-		return { claude: 'Claude', codex: 'Codex', cursor: 'Cursor' }[client];
 	}
 </script>
 
@@ -25,7 +21,7 @@
 	</summary>
 	<ul class="mt-3 space-y-2 text-amber-800 dark:text-amber-300">
 		{#each warnings as warning}
-			<li><span class="font-medium capitalize">{warning.client ? clientLabel(warning.client) : i18n.t('page.inventory.title')}:</span> {warningLabel(warning)}<code class="mt-0.5 block break-all text-xs">{warning.sourcePath}</code></li>
+			<li><span class="font-medium capitalize">{warning.client ? inventoryClientLabels[warning.client] : i18n.t('page.inventory.title')}:</span> {warningLabel(warning)}<code class="mt-0.5 block break-all text-xs">{warning.sourcePath}</code></li>
 		{/each}
 	</ul>
 </details>

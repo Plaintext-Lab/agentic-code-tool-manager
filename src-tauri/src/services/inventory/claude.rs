@@ -84,16 +84,10 @@ impl ClientAdapter for ClaudeAdapter {
     fn action_capabilities(
         &self,
         record: &InventoryRecord,
-        source_revision: Option<String>,
+        source_revision: String,
     ) -> InventoryActionCapabilities {
         if let Some(reason) = source_action_blocker(record) {
-            return InventoryActionCapabilities::blocked(reason, source_revision);
-        }
-        if source_revision.is_none() {
-            return InventoryActionCapabilities::blocked(
-                ActionBlockedReason::StateUnavailable,
-                source_revision,
-            );
+            return InventoryActionCapabilities::blocked(reason, Some(source_revision));
         }
         if record.item_type == InventoryItemType::Mcp
             && matches!(
@@ -110,8 +104,23 @@ impl ClientAdapter for ClaudeAdapter {
         }
         InventoryActionCapabilities::blocked(
             ActionBlockedReason::UnsupportedByClient,
-            source_revision,
+            Some(source_revision),
         )
+    }
+
+    fn action_revision_sources(
+        &self,
+        context: &DiscoveryContext,
+        record: &InventoryRecord,
+    ) -> Vec<String> {
+        let mut sources = vec![record.source_path.clone()];
+        if source_action_blocker(record).is_none()
+            && record.item_type == InventoryItemType::Mcp
+            && record.source_kind == SourceKind::ProjectConfig
+        {
+            sources.push(context.home_dir.join(".claude.json").display().to_string());
+        }
+        sources
     }
 }
 

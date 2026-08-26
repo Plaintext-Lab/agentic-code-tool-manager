@@ -144,7 +144,7 @@ impl InventoryActionCapabilities {
         enabled: Option<bool>,
         confirmation_required: bool,
         reload_guidance: ReloadGuidance,
-        source_revision: Option<String>,
+        source_revision: String,
     ) -> Self {
         let (enable, disable) = match enabled {
             Some(true) => (
@@ -167,7 +167,7 @@ impl InventoryActionCapabilities {
             disable,
             confirmation_required,
             reload_guidance,
-            source_revision,
+            source_revision: Some(source_revision),
         }
     }
 
@@ -365,7 +365,13 @@ pub struct InventorySnapshot {
     pub capabilities: Vec<AdapterCapabilities>,
     pub scanned_project_count: usize,
     #[serde(skip)]
-    source_revisions: HashMap<String, String>,
+    source_revisions: HashMap<String, SourceRevisionState>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceRevisionState {
+    marker: String,
+    restriction: Option<ActionBlockedReason>,
 }
 
 impl InventorySnapshot {
@@ -383,13 +389,60 @@ impl InventorySnapshot {
     pub(crate) fn record_source_revision(&mut self, path: &Path, content: &[u8]) {
         self.source_revisions.insert(
             path.display().to_string(),
-            format!("sha256:{:x}", Sha256::digest(content)),
+            SourceRevisionState {
+                marker: format!("present:sha256:{:x}", Sha256::digest(content)),
+                restriction: None,
+            },
         );
     }
 
-    /// Returns the revision captured while the source was parsed.
-    pub(crate) fn source_revision(&self, source_path: &str) -> Option<String> {
-        self.source_revisions.get(source_path).cloned()
+    /// Stores that a native state source was absent when discovery read it.
+    pub(crate) fn record_source_absence(&mut self, path: &Path) {
+        self.source_revisions
+            .entry(path.display().to_string())
+            .or_insert_with(|| SourceRevisionState {
+                marker: "absent".to_string(),
+                restriction: None,
+            });
+    }
+
+    /// Marks a source unsafe while retaining its observed fingerprint state.
+    pub(crate) fn restrict_source(&mut self, path: &str, reason: ActionBlockedReason) {
+        let state = self
+            .source_revisions
+            .entry(path.to_string())
+            .or_insert_with(|| SourceRevisionState {
+                marker: "unobserved".to_string(),
+                restriction: Some(ActionBlockedReason::StateUnavailable),
+            });
+        if state.restriction.is_none() {
+            state.restriction = Some(reason);
+        }
+    }
+
+    /// Builds one opaque revision across every source that owns an action's state.
+    pub(crate) fn composite_source_revision(
+        &self,
+        source_paths: &[String],
+    ) -> (String, Option<ActionBlockedReason>) {
+        let mut source_paths = source_paths.to_vec();
+        source_paths.sort();
+        source_paths.dedup();
+        let mut hasher = Sha256::new();
+        let mut restriction = None;
+        for source_path in source_paths {
+            let state = self.source_revisions.get(&source_path);
+            let marker = state.map_or("unobserved", |state| state.marker.as_str());
+            if restriction.is_none() {
+                restriction = state.and_then(|state| state.restriction).or_else(|| {
+                    (!self.source_revisions.contains_key(&source_path))
+                        .then_some(ActionBlockedReason::StateUnavailable)
+                });
+            }
+            hash_revision_part(&mut hasher, source_path.as_bytes());
+            hash_revision_part(&mut hasher, marker.as_bytes());
+        }
+        (format!("sha256:{:x}", hasher.finalize()), restriction)
     }
 
     pub fn finish(mut self) -> Self {
@@ -423,6 +476,11 @@ impl InventorySnapshot {
         });
         self
     }
+}
+
+fn hash_revision_part(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value);
 }
 
 fn reconcile_contextual_effectiveness(

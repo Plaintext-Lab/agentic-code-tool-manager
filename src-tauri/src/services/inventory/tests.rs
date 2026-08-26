@@ -264,10 +264,8 @@ fn codex_boundary_blocks_administrator_and_broken_link_sources() {
     );
     administrator.enabled = Some(true);
     administrator.is_effective = Some(true);
-    let administrator_actions = CodexAdapter.action_capabilities(
-        &administrator,
-        Some("sha256:administrator-fixture".to_string()),
-    );
+    let administrator_actions = CodexAdapter
+        .action_capabilities(&administrator, "sha256:administrator-fixture".to_string());
     assert_eq!(
         administrator_actions.disable.blocked_reason,
         Some(ActionBlockedReason::AdministratorSource)
@@ -287,7 +285,8 @@ fn codex_boundary_blocks_administrator_and_broken_link_sources() {
     broken_link.enabled = Some(true);
     broken_link.is_effective = Some(true);
     broken_link.is_symlink = true;
-    let broken_link_actions = CodexAdapter.action_capabilities(&broken_link, None);
+    let broken_link_actions =
+        CodexAdapter.action_capabilities(&broken_link, "sha256:broken-link".to_string());
     assert_eq!(
         broken_link_actions.disable.blocked_reason,
         Some(ActionBlockedReason::BrokenSymlink)
@@ -306,7 +305,9 @@ fn codex_boundary_blocks_administrator_and_broken_link_sources() {
     );
     missing_revision.enabled = Some(true);
     missing_revision.is_effective = Some(true);
-    let missing_revision_actions = CodexAdapter.action_capabilities(&missing_revision, None);
+    missing_revision.restrict_actions(ActionBlockedReason::StateUnavailable);
+    let missing_revision_actions =
+        CodexAdapter.action_capabilities(&missing_revision, "sha256:unobserved-source".to_string());
     assert_eq!(
         missing_revision_actions.disable.blocked_reason,
         Some(ActionBlockedReason::StateUnavailable)
@@ -412,6 +413,110 @@ fn disabled_codex_skill_is_reported_without_deleting_it() {
         .expect("disabled skill should remain visible");
     assert_eq!(skill.enabled, Some(false));
     assert!(skill_path.exists());
+}
+
+#[test]
+fn action_revisions_cover_native_state_owners() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let project = fixture.path().join("project");
+    let skill_path = home.join(".agents/skills/stateful-skill/SKILL.md");
+    write_skill(&skill_path);
+    write(
+        &home.join(".codex/hooks.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"stateful-hook"}]}]}}"#,
+    );
+    write(
+        &project.join(".mcp.json"),
+        r#"{"mcpServers":{"stateful-project":{"command":"project-server"}}}"#,
+    );
+    write(
+        &home.join(".claude.json"),
+        &format!(
+            r#"{{"projects":{{"{}":{{"hasTrustDialogAccepted":true,"enableAllProjectMcpServers":true,"disabledMcpjsonServers":[]}}}}}}"#,
+            project.display()
+        ),
+    );
+
+    let first = discover_inventory(home.clone(), vec![project.clone()]);
+    let revision = |snapshot: &super::models::InventorySnapshot,
+                    client: ClientKind,
+                    item_type: InventoryItemType,
+                    name: &str| {
+        snapshot
+            .records
+            .iter()
+            .find(|record| {
+                record.client == client && record.item_type == item_type && record.name == name
+            })
+            .expect("stateful fixture should be discovered")
+            .action_capabilities
+            .source_revision
+            .clone()
+            .expect("discovered record should have a revision")
+    };
+    let first_skill = revision(
+        &first,
+        ClientKind::Codex,
+        InventoryItemType::Skill,
+        "shared-skill",
+    );
+    let first_hook = revision(
+        &first,
+        ClientKind::Codex,
+        InventoryItemType::Hook,
+        "Stop hook",
+    );
+    let first_project_mcp = revision(
+        &first,
+        ClientKind::Claude,
+        InventoryItemType::Mcp,
+        "stateful-project",
+    );
+
+    write(
+        &home.join(".codex/config.toml"),
+        &format!(
+            "[features]\ncodex_hooks = false\n\n[[skills.config]]\npath = '{}'\nenabled = false\n",
+            skill_path.display()
+        ),
+    );
+    write(
+        &home.join(".claude.json"),
+        &format!(
+            r#"{{"projects":{{"{}":{{"hasTrustDialogAccepted":true,"enableAllProjectMcpServers":true,"disabledMcpjsonServers":["stateful-project"]}}}}}}"#,
+            project.display()
+        ),
+    );
+
+    let changed = discover_inventory(home, vec![project]);
+    assert_ne!(
+        first_skill,
+        revision(
+            &changed,
+            ClientKind::Codex,
+            InventoryItemType::Skill,
+            "shared-skill"
+        )
+    );
+    assert_ne!(
+        first_hook,
+        revision(
+            &changed,
+            ClientKind::Codex,
+            InventoryItemType::Hook,
+            "Stop hook"
+        )
+    );
+    assert_ne!(
+        first_project_mcp,
+        revision(
+            &changed,
+            ClientKind::Claude,
+            InventoryItemType::Mcp,
+            "stateful-project"
+        )
+    );
 }
 
 #[test]

@@ -78,16 +78,10 @@ impl ClientAdapter for CodexAdapter {
     fn action_capabilities(
         &self,
         record: &InventoryRecord,
-        source_revision: Option<String>,
+        source_revision: String,
     ) -> InventoryActionCapabilities {
         if let Some(reason) = source_action_blocker(record) {
-            return InventoryActionCapabilities::blocked(reason, source_revision);
-        }
-        if source_revision.is_none() {
-            return InventoryActionCapabilities::blocked(
-                ActionBlockedReason::StateUnavailable,
-                source_revision,
-            );
+            return InventoryActionCapabilities::blocked(reason, Some(source_revision));
         }
         if matches!(
             record.source_kind,
@@ -106,8 +100,36 @@ impl ClientAdapter for CodexAdapter {
         }
         InventoryActionCapabilities::blocked(
             ActionBlockedReason::UnsupportedByClient,
-            source_revision,
+            Some(source_revision),
         )
+    }
+
+    fn action_revision_sources(
+        &self,
+        context: &DiscoveryContext,
+        record: &InventoryRecord,
+    ) -> Vec<String> {
+        let mut sources = vec![record.source_path.clone()];
+        if source_action_blocker(record).is_some() {
+            return sources;
+        }
+        let global_config = context.codex_home.join("config.toml").display().to_string();
+        match record.item_type {
+            super::models::InventoryItemType::Skill => sources.push(global_config),
+            super::models::InventoryItemType::Hook => {
+                sources.push(global_config);
+                if let Some(project_path) = record.project_path.as_ref() {
+                    sources.push(
+                        Path::new(project_path)
+                            .join(".codex/config.toml")
+                            .display()
+                            .to_string(),
+                    );
+                }
+            }
+            super::models::InventoryItemType::Mcp => {}
+        }
+        sources
     }
 }
 

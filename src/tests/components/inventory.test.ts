@@ -207,4 +207,29 @@ describe('InventoryTable', () => {
 			i18n.setLocale('en');
 		}
 	});
+
+	it.each([
+		['en', 'The current state is unavailable.'],
+		['zh-CN', '当前状态不可用。'],
+		['zh-TW', '目前狀態無法取得。']
+	] as const)('translates visible missing-revision warnings in %s', (locale, explanation) => {
+		i18n.setLocale(locale);
+		try {
+			render(InventoryWarningList, {
+				props: {
+					warnings: [
+						{
+							client: 'claude',
+							sourcePath: '/Users/test/.claude.json',
+							message: 'untranslated revision warning',
+							blockedReason: 'stateUnavailable'
+						}
+					]
+				}
+			});
+			expect(screen.getByText(explanation)).toBeInTheDocument();
+		} finally {
+			i18n.setLocale('en');
+		}
+	});
 });

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Link, ShieldCheck } from 'lucide-svelte';
 	import { i18n } from '$lib/stores';
-	import { blockedReasonLabels } from '$lib/inventory/actionLabels';
+	import { blockedReasonLabels, inventoryClientLabels } from '$lib/inventory/actionLabels';
 	import type { TranslationKey } from '$lib/i18n';
 	import type {
 		InventoryClient,
@@ -14,11 +14,6 @@
 	type Props = { records: InventoryRecord[] };
 	let { records }: Props = $props();
 
-	const clientLabels: Record<InventoryClient, string> = {
-		claude: 'Claude',
-		codex: 'Codex',
-		cursor: 'Cursor'
-	};
 	const itemLabels: Record<InventoryItemType, TranslationKey> = {
 		skill: 'inventory.skill',
 		mcp: 'inventory.mcp',
@@ -77,7 +72,7 @@
 		if (enable.available) return i18n.t('inventory.actionCanEnable');
 		if (disable.available) return i18n.t('inventory.actionCanDisable');
 		const reason = enable.blockedReason ?? disable.blockedReason ?? 'stateUnavailable';
-		return i18n.t(blockedReasonLabels[reason], { client: clientLabels[record.client] });
+		return i18n.t(blockedReasonLabels[reason], { client: inventoryClientLabels[record.client] });
 	}
 </script>
 
@@ -103,7 +98,7 @@
 							</div>
 						</td>
 						<td class="px-4 py-4">
-							<span class="font-medium">{clientLabels[record.client]}</span>
+							<span class="font-medium">{inventoryClientLabels[record.client]}</span>
 							<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{i18n.t('inventory.scopeLabel', { scope: i18n.t(scopeLabels[record.scope]) })}</div>
 						</td>
 						<td class="max-w-xl px-4 py-4">

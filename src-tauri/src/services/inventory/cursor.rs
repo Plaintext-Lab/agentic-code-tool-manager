@@ -27,11 +27,19 @@ impl ClientAdapter for CursorAdapter {
     fn action_capabilities(
         &self,
         record: &InventoryRecord,
-        source_revision: Option<String>,
+        source_revision: String,
     ) -> InventoryActionCapabilities {
         let reason =
             source_action_blocker(record).unwrap_or(ActionBlockedReason::UnsupportedByClient);
-        InventoryActionCapabilities::blocked(reason, source_revision)
+        InventoryActionCapabilities::blocked(reason, Some(source_revision))
+    }
+
+    fn action_revision_sources(
+        &self,
+        _context: &DiscoveryContext,
+        record: &InventoryRecord,
+    ) -> Vec<String> {
+        vec![record.source_path.clone()]
     }
 }
 

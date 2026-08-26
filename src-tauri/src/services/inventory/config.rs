@@ -17,6 +17,10 @@ pub fn read_json(
     match serde_json::from_str(&content) {
         Ok(value) => Some(value),
         Err(_) => {
+            snapshot.restrict_source(
+                &path.display().to_string(),
+                ActionBlockedReason::MalformedSource,
+            );
             snapshot.warnings.push(InventoryWarning::new(
                 client,
                 path.display().to_string(),
@@ -36,6 +40,10 @@ pub fn read_toml(
     match toml::from_str(&content) {
         Ok(value) => Some(value),
         Err(_) => {
+            snapshot.restrict_source(
+                &path.display().to_string(),
+                ActionBlockedReason::MalformedSource,
+            );
             snapshot.warnings.push(InventoryWarning::new(
                 client,
                 path.display().to_string(),
@@ -54,7 +62,10 @@ fn read_config(
 ) -> Option<String> {
     let link_metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            snapshot.record_source_absence(path);
+            return None;
+        }
         Err(_) => {
             snapshot.warnings.push(InventoryWarning::new(
                 client,
@@ -70,6 +81,11 @@ fn read_config(
             if error.kind() == std::io::ErrorKind::NotFound
                 && link_metadata.file_type().is_symlink() =>
         {
+            snapshot.record_source_absence(path);
+            snapshot.restrict_source(
+                &path.display().to_string(),
+                ActionBlockedReason::BrokenSymlink,
+            );
             snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 path.display().to_string(),
@@ -81,6 +97,10 @@ fn read_config(
             return None;
         }
         Err(_) => {
+            snapshot.restrict_source(
+                &path.display().to_string(),
+                ActionBlockedReason::StateUnavailable,
+            );
             snapshot.warnings.push(InventoryWarning::new(
                 client,
                 path.display().to_string(),
@@ -90,6 +110,10 @@ fn read_config(
         }
     };
     if metadata.len() > MAX_CONFIG_BYTES {
+        snapshot.restrict_source(
+            &path.display().to_string(),
+            ActionBlockedReason::MalformedSource,
+        );
         snapshot.warnings.push(InventoryWarning::new(
             client,
             path.display().to_string(),
@@ -103,6 +127,10 @@ fn read_config(
             Some(content)
         }
         Err(_) => {
+            snapshot.restrict_source(
+                &path.display().to_string(),
+                ActionBlockedReason::StateUnavailable,
+            );
             snapshot.warnings.push(InventoryWarning::new(
                 client,
                 path.display().to_string(),

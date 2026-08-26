@@ -1,5 +1,11 @@
 import type { TranslationKey } from '$lib/i18n';
-import type { InventoryActionBlockedReason } from '$lib/types';
+import type { InventoryActionBlockedReason, InventoryClient } from '$lib/types';
+
+export const inventoryClientLabels: Record<InventoryClient, string> = {
+	claude: 'Claude',
+	codex: 'Codex',
+	cursor: 'Cursor'
+};
 
 export const blockedReasonLabels: Record<InventoryActionBlockedReason, TranslationKey> = {
 	alreadyEnabled: 'inventory.actionAlreadyEnabled',
