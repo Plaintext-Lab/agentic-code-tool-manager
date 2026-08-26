@@ -1722,6 +1722,105 @@ fn codex_skill_action_targets_one_duplicate_source_only() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn codex_skill_action_keeps_distinct_symlink_sources_separate() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let skills_root = home.join(".agents/skills");
+    let target = fixture.path().join("shared-target");
+    write_skill(&target.join("SKILL.md"));
+    fs::create_dir_all(&skills_root).unwrap();
+    symlink(&target, skills_root.join("alias-a")).unwrap();
+    symlink(&target, skills_root.join("alias-b")).unwrap();
+    let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+    let alias_a_path = skills_root.join("alias-a/SKILL.md").display().to_string();
+    let alias_b_path = skills_root.join("alias-b/SKILL.md").display().to_string();
+    let alias_a = initial
+        .records
+        .iter()
+        .find(|record| record.original_path == alias_a_path)
+        .unwrap();
+
+    let updated = set_inventory_record_enabled_with_paths(
+        home,
+        codex_home.clone(),
+        Vec::new(),
+        InventoryActionRequest {
+            record_id: alias_a.id.clone(),
+            enabled: false,
+            source_revision: alias_a.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        updated
+            .records
+            .iter()
+            .find(|record| record.original_path == alias_a_path)
+            .unwrap()
+            .enabled,
+        Some(false)
+    );
+    assert_eq!(
+        updated
+            .records
+            .iter()
+            .find(|record| record.original_path == alias_b_path)
+            .unwrap()
+            .enabled,
+        Some(true)
+    );
+    let config = fs::read_to_string(codex_home.join("config.toml")).unwrap();
+    assert!(config.contains(&skills_root.join("alias-a").display().to_string()));
+    assert!(!config.contains(&skills_root.join("alias-b").display().to_string()));
+}
+
+#[test]
+fn codex_skill_action_accepts_an_inline_skills_table() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let skill_file = home.join(".agents/skills/inline-skill/SKILL.md");
+    write_skill(&skill_file);
+    write(
+        &codex_home.join("config.toml"),
+        &format!(
+            "skills = {{ config = [{{ path = {:?}, enabled = true }}] }}\n",
+            skill_file.parent().unwrap().display().to_string()
+        ),
+    );
+    let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+    let record = codex_skill(&initial, "shared-skill", None);
+
+    let updated = set_inventory_record_enabled_with_paths(
+        home,
+        codex_home.clone(),
+        Vec::new(),
+        InventoryActionRequest {
+            record_id: record.id.clone(),
+            enabled: false,
+            source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        codex_skill(&updated, "shared-skill", None).enabled,
+        Some(false)
+    );
+    let parsed: toml::Value =
+        toml::from_str(&fs::read_to_string(codex_home.join("config.toml")).unwrap()).unwrap();
+    assert_eq!(
+        parsed["skills"]["config"][0]["enabled"].as_bool(),
+        Some(false)
+    );
+}
+
 #[test]
 fn codex_skill_action_rejects_a_stale_inventory_revision_without_writing() {
     let fixture = TempDir::new().unwrap();

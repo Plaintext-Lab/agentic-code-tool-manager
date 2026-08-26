@@ -96,6 +96,10 @@ tauri-plugin-updater = "2.10.0"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+xattr = "1"
+
 [dev-dependencies]
 rstest = "0.26"                                    # Parameterized tests
 tempfile = "3"                                     # Temp directories for file I/O tests

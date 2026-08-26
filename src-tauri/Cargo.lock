@@ -671,6 +671,7 @@ dependencies = [
  "fern",
  "futures",
  "insta",
+ "libc",
  "log",
  "once_cell",
  "pretty_assertions",
@@ -710,6 +711,7 @@ dependencies = [
  "walkdir",
  "windows-sys 0.61.2",
  "wiremock",
+ "xattr",
 ]
 
 [[package]]

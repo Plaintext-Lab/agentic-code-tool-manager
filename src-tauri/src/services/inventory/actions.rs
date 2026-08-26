@@ -90,6 +90,7 @@ fn set_inventory_record_enabled_with_writer(
         .map_err(|error| match error {
             ConfigWriteError::SourceChanged => InventoryActionError::StaleInventory,
             ConfigWriteError::Io => InventoryActionError::WriteFailed,
+            ConfigWriteError::RollbackFailed => InventoryActionError::RollbackFailed,
         })?;
 
     let verified = discover_inventory_with_codex_home(home_dir, codex_home, project_roots);

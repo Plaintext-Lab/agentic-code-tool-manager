@@ -4,10 +4,11 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+mod platform;
+
 pub(super) struct ConfigSource {
     pub(super) target_path: PathBuf,
     pub(super) contents: Option<Vec<u8>>,
-    permissions: Option<fs::Permissions>,
 }
 
 impl ConfigSource {
@@ -26,7 +27,6 @@ impl ConfigSource {
                 Ok(Self {
                     target_path,
                     contents: Some(contents),
-                    permissions: Some(target_metadata.permissions()),
                 })
             }
             Ok(metadata) if metadata.is_file() => {
@@ -35,14 +35,12 @@ impl ConfigSource {
                 Ok(Self {
                     target_path: config_path.to_path_buf(),
                     contents: Some(contents),
-                    permissions: Some(metadata.permissions()),
                 })
             }
             Ok(_) => Err(InventoryActionError::UnsafeConfiguration),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self {
                 target_path: config_path.to_path_buf(),
                 contents: None,
-                permissions: None,
             }),
             Err(_) => Err(InventoryActionError::UnsafeConfiguration),
         }
@@ -53,6 +51,7 @@ impl ConfigSource {
 pub(super) enum ConfigWriteError {
     SourceChanged,
     Io,
+    RollbackFailed,
 }
 
 pub(super) trait ConfigWriter {
@@ -105,45 +104,77 @@ fn write_and_replace(
         .write_all(updated)
         .and_then(|_| temp_file.sync_all())
         .map_err(|_| ConfigWriteError::Io)?;
-    if let Some(permissions) = source.permissions.clone() {
-        temp_file
-            .set_permissions(permissions)
+    drop(temp_file);
+    if source.contents.is_some() {
+        platform::copy_security_metadata(target_path, temp_path)?;
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(temp_path)
+            .and_then(|file| file.sync_all())
             .map_err(|_| ConfigWriteError::Io)?;
+        replace_existing_guarded(temp_path, target_path, source, updated)?;
+    } else {
+        match fs::hard_link(temp_path, target_path) {
+            Ok(()) => fs::remove_file(temp_path).map_err(|_| ConfigWriteError::Io)?,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(ConfigWriteError::SourceChanged);
+            }
+            Err(_) => return Err(ConfigWriteError::Io),
+        }
     }
-    replace_file(temp_path, target_path)?;
     sync_parent(target_path);
     Ok(())
 }
 
-#[cfg(not(windows))]
-fn replace_file(temp_path: &Path, target_path: &Path) -> Result<(), ConfigWriteError> {
-    fs::rename(temp_path, target_path).map_err(|_| ConfigWriteError::Io)
+fn replace_existing_guarded(
+    temp_path: &Path,
+    target_path: &Path,
+    source: &ConfigSource,
+    updated: &[u8],
+) -> Result<(), ConfigWriteError> {
+    let backup_path = target_path.with_file_name(format!(
+        ".{}.{}.backup",
+        target_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or(ConfigWriteError::Io)?,
+        Uuid::new_v4()
+    ));
+    platform::replace_existing(target_path, temp_path, &backup_path)?;
+    let replaced = match fs::read(&backup_path) {
+        Ok(replaced) => replaced,
+        Err(_) => {
+            rollback_if_update_is_current(target_path, &backup_path, updated)?;
+            return Err(ConfigWriteError::RollbackFailed);
+        }
+    };
+    if source.contents.as_deref() == Some(replaced.as_slice()) {
+        if fs::remove_file(&backup_path).is_err() {
+            rollback_if_update_is_current(target_path, &backup_path, updated)?;
+            return Err(ConfigWriteError::Io);
+        }
+        return Ok(());
+    }
+
+    rollback_if_update_is_current(target_path, &backup_path, updated)?;
+    sync_parent(target_path);
+    Err(ConfigWriteError::SourceChanged)
 }
 
-#[cfg(windows)]
-fn replace_file(temp_path: &Path, target_path: &Path) -> Result<(), ConfigWriteError> {
-    use std::iter::once;
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-
-    let source: Vec<u16> = temp_path.as_os_str().encode_wide().chain(once(0)).collect();
-    let destination: Vec<u16> = target_path
-        .as_os_str()
-        .encode_wide()
-        .chain(once(0))
-        .collect();
-    // SAFETY: Both pointers reference NUL-terminated buffers that remain alive for the call.
-    let result = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        return Err(ConfigWriteError::Io);
+fn rollback_if_update_is_current(
+    target_path: &Path,
+    backup_path: &Path,
+    updated: &[u8],
+) -> Result<(), ConfigWriteError> {
+    let target_still_contains_update = fs::read(target_path)
+        .map(|contents| contents == updated)
+        .unwrap_or(false);
+    if target_still_contains_update {
+        platform::restore_backup(target_path, backup_path)?;
+    }
+    if backup_path.exists() {
+        fs::remove_file(backup_path).map_err(|_| ConfigWriteError::RollbackFailed)?;
     }
     Ok(())
 }
@@ -166,7 +197,6 @@ pub(super) fn restore_original(
             let written_source = ConfigSource {
                 target_path: source.target_path.clone(),
                 contents: Some(written.to_vec()),
-                permissions: source.permissions.clone(),
             };
             AtomicConfigWriter
                 .replace(&written_source, original)
@@ -232,6 +262,46 @@ mod tests {
 
         assert_eq!(error, ConfigWriteError::SourceChanged);
         assert_eq!(fs::read(config_path).unwrap(), b"# changed elsewhere\n");
+    }
+
+    #[test]
+    fn restores_a_concurrent_edit_that_lands_while_the_replacement_is_prepared() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        let temp_path = fixture.path().join(".config.concurrent.tmp");
+        fs::write(&config_path, "# scanned\n").unwrap();
+        let source = ConfigSource::read(&config_path).unwrap();
+        fs::write(&config_path, "# concurrent edit\n").unwrap();
+
+        let error =
+            write_and_replace(&temp_path, &config_path, &source, b"# requested\n").unwrap_err();
+
+        assert_eq!(error, ConfigWriteError::SourceChanged);
+        assert_eq!(fs::read(config_path).unwrap(), b"# concurrent edit\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserves_extended_security_metadata() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        fs::write(&config_path, "# original\n").unwrap();
+        let attribute = if cfg!(target_os = "macos") {
+            "com.plaintext-lab.inventory-test"
+        } else {
+            "user.inventory-test"
+        };
+        xattr::set(&config_path, attribute, b"protected").unwrap();
+        let source = ConfigSource::read(&config_path).unwrap();
+
+        AtomicConfigWriter
+            .replace(&source, b"# replacement\n")
+            .unwrap();
+
+        assert_eq!(
+            xattr::get(config_path, attribute).unwrap().unwrap(),
+            b"protected"
+        );
     }
 
     #[test]

@@ -201,9 +201,6 @@ pub fn codex_disabled_skill_paths(config: Option<&toml::Value>) -> HashSet<Strin
         let path = PathBuf::from(path);
         for candidate in skill_config_path_candidates(&path) {
             disabled.insert(candidate.display().to_string());
-            if let Ok(resolved) = std::fs::canonicalize(&candidate) {
-                disabled.insert(resolved.display().to_string());
-            }
         }
     }
     disabled

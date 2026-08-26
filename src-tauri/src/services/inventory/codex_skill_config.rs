@@ -1,6 +1,5 @@
 use super::actions::InventoryActionError;
 use super::models::InventoryRecord;
-use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{value, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
@@ -22,9 +21,13 @@ pub(super) fn update_codex_skill_config(
         .ok_or(InventoryActionError::UnsupportedRecord)?;
     let aliases = skill_path_aliases(record);
 
-    let skills = document
+    let skills_item = document
         .entry("skills")
-        .or_insert(Item::Table(Table::new()))
+        .or_insert(Item::Table(Table::new()));
+    if let Item::Value(Value::InlineTable(table)) = skills_item {
+        *skills_item = Item::Table(table.clone().into_table());
+    }
+    let skills = skills_item
         .as_table_mut()
         .ok_or(InventoryActionError::MalformedConfiguration)?;
     let entries = skills
@@ -157,12 +160,6 @@ fn skill_path_aliases(record: &InventoryRecord) -> Vec<PathBuf> {
     if let Some(parent) = Path::new(&record.original_path).parent() {
         aliases.push(parent.to_path_buf());
     }
-    if let Some(resolved) = record.resolved_path.as_ref() {
-        aliases.push(PathBuf::from(resolved));
-        if let Some(parent) = Path::new(resolved).parent() {
-            aliases.push(parent.to_path_buf());
-        }
-    }
     aliases.sort();
     aliases.dedup();
     aliases
@@ -171,16 +168,6 @@ fn skill_path_aliases(record: &InventoryRecord) -> Vec<PathBuf> {
 fn configured_path_matches(configured: &Path, aliases: &[PathBuf]) -> bool {
     if aliases.iter().any(|alias| alias == configured) {
         return true;
-    }
-    if let Ok(resolved) = fs::canonicalize(configured) {
-        if aliases.iter().any(|alias| alias == &resolved) {
-            return true;
-        }
-        if resolved.is_dir() {
-            return aliases
-                .iter()
-                .any(|alias| alias == &resolved.join("SKILL.md"));
-        }
     }
     aliases
         .iter()
