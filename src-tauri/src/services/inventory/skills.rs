@@ -136,6 +136,8 @@ pub fn scan_skill_root(
                 continue;
             }
         };
+        let original_path_is_lossless =
+            Path::new(&original_path).as_os_str() == skill_file.as_os_str();
         let resolved_path = resolved.display().to_string();
         let enabled = source_enabled
             && !disabled_paths.contains(&original_path)
@@ -157,7 +159,7 @@ pub fn scan_skill_root(
         record.enabled = Some(enabled);
         record.trust_state = trust_state;
         record.is_effective = effective_state(enabled && has_required_name, trust_state);
-        if !has_required_name {
+        if !has_required_name || !original_path_is_lossless {
             record.restrict_actions(ActionBlockedReason::MalformedSource);
         }
         snapshot.records.push(record);
@@ -204,6 +206,37 @@ pub fn codex_disabled_skill_paths(config: Option<&toml::Value>) -> HashSet<Strin
         }
     }
     disabled
+}
+
+pub fn codex_skill_config_is_editable(config: Option<&toml::Value>) -> bool {
+    let Some(config) = config else {
+        return true;
+    };
+    let Some(skills) = config.get("skills") else {
+        return true;
+    };
+    let Some(skills) = skills.as_table() else {
+        return false;
+    };
+    let Some(entries) = skills.get("config") else {
+        return true;
+    };
+    let Some(entries) = entries.as_array() else {
+        return false;
+    };
+    entries.iter().all(|entry| {
+        let Some(entry) = entry.as_table() else {
+            return false;
+        };
+        let valid_path = entry
+            .get("path")
+            .and_then(toml::Value::as_str)
+            .is_some_and(|path| !path.trim().is_empty());
+        let valid_enabled = entry
+            .get("enabled")
+            .is_none_or(|enabled| enabled.as_bool().is_some());
+        valid_path && valid_enabled
+    })
 }
 
 fn skill_config_path_candidates(path: &Path) -> Vec<PathBuf> {
@@ -261,7 +294,7 @@ fn push_skill_warning(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_frontmatter_name;
+    use super::{codex_skill_config_is_editable, parse_frontmatter_name};
 
     #[test]
     fn parses_quoted_frontmatter_name() {
@@ -275,6 +308,32 @@ mod tests {
     #[test]
     fn ignores_name_outside_frontmatter() {
         assert_eq!(parse_frontmatter_name("# Skill\nname: unsafe"), None);
+    }
+
+    #[test]
+    fn rejects_malformed_codex_skill_entries() {
+        let missing_path: toml::Value =
+            toml::from_str("[[skills.config]]\nenabled = false\n").unwrap();
+        let invalid_enabled: toml::Value =
+            toml::from_str("[[skills.config]]\npath = '/tmp/skill'\nenabled = 'no'\n").unwrap();
+
+        assert!(!codex_skill_config_is_editable(Some(&missing_path)));
+        assert!(!codex_skill_config_is_editable(Some(&invalid_enabled)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lossy_skill_path_does_not_round_trip() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = std::path::PathBuf::from(OsString::from_vec(b"skill-\xff/SKILL.md".to_vec()));
+        let rendered = path.display().to_string();
+
+        assert_ne!(
+            std::path::Path::new(&rendered).as_os_str(),
+            path.as_os_str()
+        );
     }
 
     #[test]

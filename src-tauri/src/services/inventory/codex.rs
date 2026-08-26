@@ -6,7 +6,10 @@ use super::models::{
     TrustState,
 };
 use super::plugins::discover_codex_plugins;
-use super::skills::{codex_disabled_skill_paths, discover_project_skill_roots, scan_skill_root};
+use super::skills::{
+    codex_disabled_skill_paths, codex_skill_config_is_editable, discover_project_skill_roots,
+    scan_skill_root,
+};
 use super::ClientAdapter;
 use std::path::Path;
 
@@ -73,6 +76,14 @@ impl ClientAdapter for CodexAdapter {
             global_hooks_enabled,
             snapshot,
         );
+        if !codex_skill_config_is_editable(global_config.as_ref()) {
+            for record in snapshot.records.iter_mut().filter(|record| {
+                record.client == ClientKind::Codex
+                    && record.item_type == super::models::InventoryItemType::Skill
+            }) {
+                record.restrict_actions(ActionBlockedReason::MalformedSource);
+            }
+        }
     }
 
     fn action_capabilities(

@@ -1990,7 +1990,7 @@ fn codex_skill_action_rejects_non_skill_records_without_exposing_config() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn codex_skill_action_rejects_malformed_native_entries_without_writing() {
+fn malformed_codex_skill_configuration_is_read_only() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");
     let codex_home = home.join(".codex");
@@ -2002,21 +2002,14 @@ fn codex_skill_action_rejects_malformed_native_entries_without_writing() {
     );
     let original = fs::read(&config_path).unwrap();
     let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
-    let record = codex_skill(&initial, "shared-skill", None);
+    let actions = &codex_skill(&initial, "shared-skill", None).action_capabilities;
 
-    let error = set_inventory_record_enabled_with_paths(
-        home,
-        codex_home,
-        Vec::new(),
-        InventoryActionRequest {
-            record_id: record.id.clone(),
-            enabled: false,
-            source_revision: record.action_capabilities.source_revision.clone().unwrap(),
-        },
-    )
-    .unwrap_err();
-
-    assert_eq!(error, InventoryActionError::MalformedConfiguration);
+    assert!(!actions.enable.available);
+    assert!(!actions.disable.available);
+    assert_eq!(
+        actions.disable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
     assert_eq!(fs::read(config_path).unwrap(), original);
 }
 

@@ -111,13 +111,7 @@ fn write_and_replace(
             .map_err(|_| ConfigWriteError::Io)?;
         replace_existing_guarded(temp_path, target_path, source, updated)?;
     } else {
-        match fs::hard_link(temp_path, target_path) {
-            Ok(()) => fs::remove_file(temp_path).map_err(|_| ConfigWriteError::Io)?,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                return Err(ConfigWriteError::SourceChanged);
-            }
-            Err(_) => return Err(ConfigWriteError::Io),
-        }
+        platform::commit_new(temp_path, target_path)?;
     }
     sync_parent(target_path);
     Ok(())
@@ -203,12 +197,9 @@ pub(super) fn restore_original(
                 .map_err(|_| InventoryActionError::RollbackFailed)
         }
         None => {
-            let current =
-                fs::read(&source.target_path).map_err(|_| InventoryActionError::RollbackFailed)?;
-            if current != written {
-                return Err(InventoryActionError::RollbackFailed);
-            }
-            fs::remove_file(&source.target_path)
+            let quarantine_path = sidecar_path(&source.target_path, "rollback")
+                .map_err(|_| InventoryActionError::RollbackFailed)?;
+            platform::guarded_remove(&source.target_path, written, &quarantine_path)
                 .map_err(|_| InventoryActionError::RollbackFailed)?;
             sync_parent(&source.target_path);
             Ok(())
@@ -246,6 +237,21 @@ mod tests {
         restore_original(&source, updated).unwrap();
 
         assert!(!config_path.exists());
+    }
+
+    #[test]
+    fn keeps_a_concurrent_config_created_before_new_config_rollback() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("codex/config.toml");
+        let source = ConfigSource::read(&config_path).unwrap();
+        let updated = b"# newly created\n";
+        AtomicConfigWriter.replace(&source, updated).unwrap();
+        fs::write(&config_path, "# concurrent config\n").unwrap();
+
+        let error = restore_original(&source, updated).unwrap_err();
+
+        assert_eq!(error, InventoryActionError::RollbackFailed);
+        assert_eq!(fs::read(config_path).unwrap(), b"# concurrent config\n");
     }
 
     #[test]
