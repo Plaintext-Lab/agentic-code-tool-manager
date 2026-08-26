@@ -78,6 +78,10 @@ fn discovers_all_clients_and_never_serializes_secret_values() {
         .records
         .iter()
         .any(|record| !record.protected_fields.is_empty()));
+    assert!(snapshot
+        .records
+        .iter()
+        .all(|record| record.action_capabilities.source_revision.is_some()));
 
     let serialized = serde_json::to_string(&snapshot).unwrap();
     for secret in [
@@ -104,9 +108,10 @@ fn reports_normalized_action_capabilities_for_each_client_boundary() {
     let home = fixture.path().join("home");
     let managed_settings = fixture.path().join("managed-settings-missing.json");
     let managed_mcp = fixture.path().join("managed-mcp.json");
+    let project = fixture.path().join("project");
     write(
         &home.join(".claude.json"),
-        r#"{"mcpServers":{"claude-server":{"command":"claude-secret-command"}}}"#,
+        r#"{"mcpServers":{"claude-server":{"command":"claude-secret-command"},"disabled-policy-server":{"command":"disabled-policy-secret","disabled":true}}}"#,
     );
     write(
         &home.join(".codex/config.toml"),
@@ -120,13 +125,17 @@ fn reports_normalized_action_capabilities_for_each_client_boundary() {
         &managed_mcp,
         r#"{"mcpServers":{"managed-server":{"command":"managed-secret-command"}}}"#,
     );
+    write(
+        &project.join(".mcp.json"),
+        r#"{"mcpServers":{"project-policy-server":{"command":"project-policy-secret"}}}"#,
+    );
 
     let snapshot = discover_inventory_with_paths(
         home.clone(),
         home.join(".codex"),
         managed_settings.clone(),
         fixture.path().join("managed-mcp-missing.json"),
-        Vec::new(),
+        vec![project.clone()],
     );
     let record = |name: &str| {
         snapshot
@@ -188,7 +197,7 @@ fn reports_normalized_action_capabilities_for_each_client_boundary() {
         home.join(".codex"),
         managed_settings,
         managed_mcp,
-        Vec::new(),
+        vec![project],
     );
     let managed_actions = &managed_snapshot
         .records
@@ -202,15 +211,25 @@ fn reports_normalized_action_capabilities_for_each_client_boundary() {
         managed_actions.enable.blocked_reason,
         Some(ActionBlockedReason::ManagedSource)
     );
-    let policy_controlled = managed_snapshot
-        .records
-        .iter()
-        .find(|record| record.name == "claude-server")
-        .expect("managed policy should leave the user record visible");
-    assert_eq!(
-        policy_controlled.action_capabilities.disable.blocked_reason,
-        Some(ActionBlockedReason::PolicyControlled)
-    );
+    for name in [
+        "claude-server",
+        "disabled-policy-server",
+        "project-policy-server",
+    ] {
+        let policy_controlled = managed_snapshot
+            .records
+            .iter()
+            .find(|record| record.name == name)
+            .expect("managed policy should leave the source record visible");
+        assert_eq!(
+            policy_controlled.action_capabilities.enable.blocked_reason,
+            Some(ActionBlockedReason::PolicyControlled)
+        );
+        assert_eq!(
+            policy_controlled.action_capabilities.disable.blocked_reason,
+            Some(ActionBlockedReason::PolicyControlled)
+        );
+    }
 
     let serialized = format!(
         "{}{}",
@@ -223,6 +242,8 @@ fn reports_normalized_action_capabilities_for_each_client_boundary() {
         "cursor-secret-command",
         "managed-secret-command",
         "changed-codex-command",
+        "disabled-policy-secret",
+        "project-policy-secret",
     ] {
         assert!(!serialized.contains(protected_value));
     }
@@ -270,6 +291,25 @@ fn codex_boundary_blocks_administrator_and_broken_link_sources() {
     assert_eq!(
         broken_link_actions.disable.blocked_reason,
         Some(ActionBlockedReason::BrokenSymlink)
+    );
+
+    let mut missing_revision = InventoryRecord::new(
+        ClientKind::Codex,
+        InventoryItemType::Mcp,
+        "missing-revision".to_string(),
+        InventoryScope::User,
+        SourceKind::UserConfig,
+        "/tmp/config.toml".to_string(),
+        None,
+        0,
+        100,
+    );
+    missing_revision.enabled = Some(true);
+    missing_revision.is_effective = Some(true);
+    let missing_revision_actions = CodexAdapter.action_capabilities(&missing_revision, None);
+    assert_eq!(
+        missing_revision_actions.disable.blocked_reason,
+        Some(ActionBlockedReason::StateUnavailable)
     );
 }
 
@@ -1215,7 +1255,15 @@ fn malformed_mcp_transports_are_skipped_with_warnings() {
     let snapshot = discover_inventory(home, Vec::new());
 
     for name in ["valid-json", "valid-toml"] {
-        assert!(snapshot.records.iter().any(|record| record.name == name));
+        let record = snapshot
+            .records
+            .iter()
+            .find(|record| record.name == name)
+            .expect("valid sibling should remain visible");
+        assert_eq!(
+            record.action_capabilities.disable.blocked_reason,
+            Some(ActionBlockedReason::MalformedSource)
+        );
     }
     for name in ["empty-json", "null-url", "empty-toml", "blank-url"] {
         assert!(!snapshot.records.iter().any(|record| record.name == name));
@@ -1246,6 +1294,7 @@ fn dangling_configuration_symlink_produces_a_warning() {
     assert!(snapshot.warnings.iter().any(|warning| {
         warning.source_path == config_path.display().to_string()
             && warning.message.contains("symlink")
+            && warning.blocked_reason == Some(ActionBlockedReason::BrokenSymlink)
     }));
 }
 
@@ -1352,7 +1401,9 @@ fn symlinked_skills_resolve_and_cycles_become_warnings() {
     assert!(linked.is_symlink);
     assert_ne!(linked.original_path, linked.resolved_path.clone().unwrap());
     assert!(snapshot.warnings.iter().any(|warning| {
-        warning.source_path.ends_with("broken-skill") && warning.message.contains("broken")
+        warning.source_path.ends_with("broken-skill")
+            && warning.message.contains("broken")
+            && warning.blocked_reason == Some(ActionBlockedReason::BrokenSymlink)
     }));
     assert!(snapshot.warnings.iter().any(|warning| {
         warning.source_path.ends_with("cycle") && warning.message.contains("cyclic")

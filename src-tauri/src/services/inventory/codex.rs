@@ -83,6 +83,12 @@ impl ClientAdapter for CodexAdapter {
         if let Some(reason) = source_action_blocker(record) {
             return InventoryActionCapabilities::blocked(reason, source_revision);
         }
+        if source_revision.is_none() {
+            return InventoryActionCapabilities::blocked(
+                ActionBlockedReason::StateUnavailable,
+                source_revision,
+            );
+        }
         if matches!(
             record.source_kind,
             SourceKind::UserConfig
@@ -91,7 +97,12 @@ impl ClientAdapter for CodexAdapter {
                 | SourceKind::ProjectSkills
                 | SourceKind::LegacySkills
         ) {
-            return InventoryActionCapabilities::stateful(record.enabled, source_revision);
+            return InventoryActionCapabilities::stateful(
+                record.enabled,
+                true,
+                super::models::ReloadGuidance::RestartClient,
+                source_revision,
+            );
         }
         InventoryActionCapabilities::blocked(
             ActionBlockedReason::UnsupportedByClient,

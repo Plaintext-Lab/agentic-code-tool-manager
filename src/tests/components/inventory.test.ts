@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/svelte';
 import InventoryTable from '$lib/components/inventory/InventoryTable.svelte';
+import InventoryWarningList from '$lib/components/inventory/InventoryWarningList.svelte';
 import { i18n } from '$lib/i18n';
 import type { InventoryRecord } from '$lib/types';
 
@@ -176,6 +177,32 @@ describe('InventoryTable', () => {
 				}
 			});
 			expect(screen.getByText(explanation)).toBeInTheDocument();
+		} finally {
+			i18n.setLocale('en');
+		}
+	});
+
+	it.each([
+		['en', 'Fix this broken link before changing it.'],
+		['zh-CN', '请先修复此断开的链接。'],
+		['zh-TW', '請先修正此中斷的連結。']
+	] as const)('translates visible broken-link warnings in %s', (locale, explanation) => {
+		i18n.setLocale(locale);
+		try {
+			render(InventoryWarningList, {
+				props: {
+					warnings: [
+						{
+							client: 'codex',
+							sourcePath: '/Users/test/.agents/skills/broken-link',
+							message: 'untranslated warning with protected-value',
+							blockedReason: 'brokenSymlink'
+						}
+					]
+				}
+			});
+			expect(screen.getByText(explanation)).toBeInTheDocument();
+			expect(document.body.textContent).not.toContain('protected-value');
 		} finally {
 			i18n.setLocale('en');
 		}

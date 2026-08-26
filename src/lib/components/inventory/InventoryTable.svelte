@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { Link, ShieldCheck } from 'lucide-svelte';
 	import { i18n } from '$lib/stores';
+	import { blockedReasonLabels } from '$lib/inventory/actionLabels';
 	import type { TranslationKey } from '$lib/i18n';
 	import type {
 		InventoryClient,
-		InventoryActionBlockedReason,
 		InventoryItemType,
 		InventoryRecord,
 		InventoryScope,
@@ -42,19 +42,6 @@
 		pluginConfig: 'inventory.sourcePluginConfig',
 		pluginSkills: 'inventory.sourcePluginSkills'
 	};
-	const blockedReasonLabels: Record<InventoryActionBlockedReason, TranslationKey> = {
-		alreadyEnabled: 'inventory.actionAlreadyEnabled',
-		alreadyDisabled: 'inventory.actionAlreadyDisabled',
-		stateUnavailable: 'inventory.actionStateUnavailable',
-		managedSource: 'inventory.actionManagedSource',
-		administratorSource: 'inventory.actionAdministratorSource',
-		policyControlled: 'inventory.actionPolicyControlled',
-		pluginOwnedSource: 'inventory.actionPluginOwnedSource',
-		malformedSource: 'inventory.actionMalformedSource',
-		brokenSymlink: 'inventory.actionBrokenSymlink',
-		unsupportedByClient: 'inventory.actionUnsupportedByClient'
-	};
-
 	function statusLabel(record: InventoryRecord): string {
 		if (record.enabled === null) return i18n.t('inventory.statusNotReported');
 		if (!record.enabled) return i18n.t('inventory.statusDisabled');

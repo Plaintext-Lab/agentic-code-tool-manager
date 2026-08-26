@@ -1,6 +1,7 @@
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -138,7 +139,13 @@ pub struct InventoryActionCapabilities {
 }
 
 impl InventoryActionCapabilities {
-    pub fn stateful(enabled: Option<bool>, source_revision: Option<String>) -> Self {
+    /// Reports native actions for a record whose client has a documented state control.
+    pub fn stateful(
+        enabled: Option<bool>,
+        confirmation_required: bool,
+        reload_guidance: ReloadGuidance,
+        source_revision: Option<String>,
+    ) -> Self {
         let (enable, disable) = match enabled {
             Some(true) => (
                 ActionAvailability::blocked(ActionBlockedReason::AlreadyEnabled),
@@ -153,20 +160,18 @@ impl InventoryActionCapabilities {
                 ActionAvailability::blocked(ActionBlockedReason::StateUnavailable),
             ),
         };
-        let confirmation_required = enable.available || disable.available;
+        let confirmation_required =
+            confirmation_required && (enable.available || disable.available);
         Self {
             enable,
             disable,
             confirmation_required,
-            reload_guidance: if confirmation_required {
-                ReloadGuidance::RestartClient
-            } else {
-                ReloadGuidance::NotRequired
-            },
+            reload_guidance,
             source_revision,
         }
     }
 
+    /// Reports why neither native action can be offered safely.
     pub fn blocked(reason: ActionBlockedReason, source_revision: Option<String>) -> Self {
         Self {
             enable: ActionAvailability::blocked(reason),
@@ -219,6 +224,8 @@ pub struct InventoryRecord {
     pub protected_fields: Vec<String>,
     pub detail: Option<String>,
     pub action_capabilities: InventoryActionCapabilities,
+    #[serde(skip)]
+    pub(crate) action_restriction: Option<ActionBlockedReason>,
 }
 
 impl InventoryRecord {
@@ -267,10 +274,19 @@ impl InventoryRecord {
                 ActionBlockedReason::UnsupportedByClient,
                 None,
             ),
+            action_restriction: None,
+        }
+    }
+
+    /// Marks a discovered record read-only for a normalized, non-sensitive reason.
+    pub(crate) fn restrict_actions(&mut self, reason: ActionBlockedReason) {
+        if self.action_restriction.is_none() {
+            self.action_restriction = Some(reason);
         }
     }
 }
 
+/// Returns restrictions shared by all client adapters before client-native checks.
 pub fn source_action_blocker(record: &InventoryRecord) -> Option<ActionBlockedReason> {
     if record.source_kind == SourceKind::ManagedConfig {
         return Some(ActionBlockedReason::ManagedSource);
@@ -287,12 +303,8 @@ pub fn source_action_blocker(record: &InventoryRecord) -> Option<ActionBlockedRe
     if record.is_symlink && record.resolved_path.is_none() {
         return Some(ActionBlockedReason::BrokenSymlink);
     }
-    if record.item_type == InventoryItemType::Skill
-        && record.enabled == Some(true)
-        && record.is_effective == Some(false)
-        && record.trust_state != TrustState::Untrusted
-    {
-        return Some(ActionBlockedReason::MalformedSource);
+    if let Some(reason) = record.action_restriction {
+        return Some(reason);
     }
     None
 }
@@ -303,6 +315,7 @@ pub struct InventoryWarning {
     pub client: Option<ClientKind>,
     pub source_path: String,
     pub message: String,
+    pub blocked_reason: Option<ActionBlockedReason>,
 }
 
 impl InventoryWarning {
@@ -315,6 +328,22 @@ impl InventoryWarning {
             client: Some(client),
             source_path: source_path.into(),
             message: message.into(),
+            blocked_reason: None,
+        }
+    }
+
+    /// Creates a warning whose safe reason can be translated by the interface.
+    pub fn blocked(
+        client: ClientKind,
+        source_path: impl Into<String>,
+        message: impl Into<String>,
+        blocked_reason: ActionBlockedReason,
+    ) -> Self {
+        Self {
+            client: Some(client),
+            source_path: source_path.into(),
+            message: message.into(),
+            blocked_reason: Some(blocked_reason),
         }
     }
 
@@ -323,6 +352,7 @@ impl InventoryWarning {
             client: None,
             source_path: source_path.into(),
             message: message.into(),
+            blocked_reason: None,
         }
     }
 }
@@ -334,6 +364,8 @@ pub struct InventorySnapshot {
     pub warnings: Vec<InventoryWarning>,
     pub capabilities: Vec<AdapterCapabilities>,
     pub scanned_project_count: usize,
+    #[serde(skip)]
+    source_revisions: HashMap<String, String>,
 }
 
 impl InventorySnapshot {
@@ -343,7 +375,21 @@ impl InventorySnapshot {
             warnings: Vec::new(),
             capabilities: Vec::new(),
             scanned_project_count,
+            source_revisions: HashMap::new(),
         }
+    }
+
+    /// Stores a revision from the exact bytes used to parse a discovered source.
+    pub(crate) fn record_source_revision(&mut self, path: &Path, content: &[u8]) {
+        self.source_revisions.insert(
+            path.display().to_string(),
+            format!("sha256:{:x}", Sha256::digest(content)),
+        );
+    }
+
+    /// Returns the revision captured while the source was parsed.
+    pub(crate) fn source_revision(&self, source_path: &str) -> Option<String> {
+        self.source_revisions.get(source_path).cloned()
     }
 
     pub fn finish(mut self) -> Self {

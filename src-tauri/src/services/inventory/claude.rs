@@ -65,6 +65,17 @@ impl ClientAdapter for ClaudeAdapter {
                     && record.source_kind != SourceKind::ManagedConfig
                 {
                     record.is_effective = Some(false);
+                    record.restrict_actions(ActionBlockedReason::PolicyControlled);
+                }
+            }
+        }
+        if policy.allow_managed_hooks_only || policy.managed_hooks_enabled.is_some() {
+            for record in &mut snapshot.records {
+                if record.client == ClientKind::Claude
+                    && record.item_type == InventoryItemType::Hook
+                    && record.source_kind != SourceKind::ManagedConfig
+                {
+                    record.restrict_actions(ActionBlockedReason::PolicyControlled);
                 }
             }
         }
@@ -78,14 +89,9 @@ impl ClientAdapter for ClaudeAdapter {
         if let Some(reason) = source_action_blocker(record) {
             return InventoryActionCapabilities::blocked(reason, source_revision);
         }
-        if record.item_type == InventoryItemType::Mcp
-            && record.scope == InventoryScope::User
-            && record.enabled == Some(true)
-            && record.is_effective == Some(false)
-            && record.trust_state != TrustState::Untrusted
-        {
+        if source_revision.is_none() {
             return InventoryActionCapabilities::blocked(
-                ActionBlockedReason::PolicyControlled,
+                ActionBlockedReason::StateUnavailable,
                 source_revision,
             );
         }
@@ -95,7 +101,12 @@ impl ClientAdapter for ClaudeAdapter {
                 SourceKind::UserConfig | SourceKind::ProjectConfig | SourceKind::LocalConfig
             )
         {
-            return InventoryActionCapabilities::stateful(record.enabled, source_revision);
+            return InventoryActionCapabilities::stateful(
+                record.enabled,
+                true,
+                super::models::ReloadGuidance::RestartClient,
+                source_revision,
+            );
         }
         InventoryActionCapabilities::blocked(
             ActionBlockedReason::UnsupportedByClient,

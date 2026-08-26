@@ -1,6 +1,6 @@
 use super::models::{
-    effective_state, ClientKind, InventoryItemType, InventoryRecord, InventoryScope,
-    InventorySnapshot, InventoryWarning, SourceKind, TrustState,
+    effective_state, ActionBlockedReason, ClientKind, InventoryItemType, InventoryRecord,
+    InventoryScope, InventorySnapshot, InventoryWarning, SourceKind, TrustState,
 };
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -70,12 +70,13 @@ fn read_config(
             if error.kind() == std::io::ErrorKind::NotFound
                 && link_metadata.file_type().is_symlink() =>
         {
-            snapshot.warnings.push(InventoryWarning::new(
+            snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 path.display().to_string(),
                 format!(
                     "Skipped this {format_name} configuration because its symlink target is unavailable."
                 ),
+                ActionBlockedReason::BrokenSymlink,
             ));
             return None;
         }
@@ -97,7 +98,10 @@ fn read_config(
         return None;
     }
     match std::fs::read_to_string(path) {
-        Ok(content) => Some(content),
+        Ok(content) => {
+            snapshot.record_source_revision(path, content.as_bytes());
+            Some(content)
+        }
         Err(_) => {
             snapshot.warnings.push(InventoryWarning::new(
                 client,
@@ -173,6 +177,9 @@ pub fn push_json_mcps(
         };
         record.protected_fields = json_protected_fields(config);
         record.detail = Some(detail.to_string());
+        if policy_blocked_names.contains(name) {
+            record.restrict_actions(ActionBlockedReason::PolicyControlled);
+        }
         snapshot.records.push(record);
     }
 }

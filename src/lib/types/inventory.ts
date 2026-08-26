@@ -71,6 +71,7 @@ export interface InventoryWarning {
 	client: InventoryClient | null;
 	sourcePath: string;
 	message: string;
+	blockedReason: InventoryActionBlockedReason | null;
 }
 
 export interface InventorySnapshot {

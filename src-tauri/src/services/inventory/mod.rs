@@ -14,11 +14,10 @@ use claude::ClaudeAdapter;
 use codex::CodexAdapter;
 use cursor::CursorAdapter;
 use models::{
-    AdapterCapabilities, DiscoveryContext, InventoryActionCapabilities, InventoryRecord,
-    InventoryWarning,
+    ActionBlockedReason, AdapterCapabilities, DiscoveryContext, InventoryActionCapabilities,
+    InventoryRecord, InventoryWarning,
 };
-use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -78,26 +77,54 @@ fn discover_inventory_with_paths(
     let mut snapshot = InventorySnapshot::new(context.project_roots.len());
     snapshot.warnings = warnings;
     let adapters: [&dyn ClientAdapter; 3] = [&ClaudeAdapter, &CodexAdapter, &CursorAdapter];
-    let mut source_revisions = HashMap::new();
     for adapter in adapters {
         snapshot.capabilities.push(adapter.capabilities());
         let first_new_record = snapshot.records.len();
+        let first_new_warning = snapshot.warnings.len();
         adapter.discover(&context, &mut snapshot);
-        for record in &mut snapshot.records[first_new_record..] {
-            let source_revision = source_revisions
-                .entry(record.source_path.clone())
-                .or_insert_with(|| source_revision(Path::new(&record.source_path)))
-                .clone();
+        let source_restrictions: Vec<_> = snapshot.warnings[first_new_warning..]
+            .iter()
+            .filter_map(|warning| {
+                Some((
+                    warning.client?,
+                    warning.source_path.clone(),
+                    warning
+                        .blocked_reason
+                        .unwrap_or(ActionBlockedReason::MalformedSource),
+                ))
+            })
+            .collect();
+        let source_revisions: Vec<_> = snapshot.records[first_new_record..]
+            .iter()
+            .map(|record| snapshot.source_revision(&record.source_path))
+            .collect();
+        let mut missing_revisions = HashSet::new();
+        for (record, source_revision) in snapshot.records[first_new_record..]
+            .iter_mut()
+            .zip(source_revisions)
+        {
+            if let Some((_, _, reason)) = source_restrictions
+                .iter()
+                .find(|(client, path, _)| *client == record.client && path == &record.source_path)
+            {
+                record.restrict_actions(*reason);
+            }
+            if source_revision.is_none() {
+                missing_revisions.insert((record.client, record.source_path.clone()));
+            }
             record.action_capabilities = adapter.action_capabilities(record, source_revision);
         }
+        snapshot
+            .warnings
+            .extend(missing_revisions.into_iter().map(|(client, source_path)| {
+                InventoryWarning::new(
+                    client,
+                    source_path,
+                    "Could not create a source revision; actions remain read-only.",
+                )
+            }));
     }
     snapshot.finish()
-}
-
-fn source_revision(path: &Path) -> Option<String> {
-    std::fs::read(path)
-        .ok()
-        .map(|content| format!("sha256:{:x}", Sha256::digest(content)))
 }
 
 fn existing_unique_roots(project_roots: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<InventoryWarning>) {
