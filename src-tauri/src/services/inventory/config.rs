@@ -158,10 +158,11 @@ pub fn push_json_mcps(
 ) {
     for (ordinal, (name, value)) in servers.iter().enumerate() {
         let Some(config) = value.as_object() else {
-            snapshot.warnings.push(InventoryWarning::new(
+            snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 config_path.display().to_string(),
                 "Skipped an MCP entry because it is not an object.",
+                ActionBlockedReason::MalformedSource,
             ));
             continue;
         };
@@ -176,10 +177,11 @@ pub fn push_json_mcps(
             })
             .unwrap_or_else(|| !disabled_names.contains(name));
         let Some(detail) = json_transport_detail(config) else {
-            snapshot.warnings.push(InventoryWarning::new(
+            snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 config_path.display().to_string(),
                 "Skipped an MCP entry because it has no usable transport.",
+                ActionBlockedReason::MalformedSource,
             ));
             continue;
         };
@@ -230,10 +232,11 @@ pub fn push_toml_mcps(
     };
     for (ordinal, (name, value)) in servers.iter().enumerate() {
         let Some(server) = value.as_table() else {
-            snapshot.warnings.push(InventoryWarning::new(
+            snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 config_path.display().to_string(),
                 "Skipped an MCP entry because it is not a table.",
+                ActionBlockedReason::MalformedSource,
             ));
             continue;
         };
@@ -242,10 +245,11 @@ pub fn push_toml_mcps(
             .and_then(toml::Value::as_bool)
             .unwrap_or(true);
         let Some(detail) = toml_transport_detail(server) else {
-            snapshot.warnings.push(InventoryWarning::new(
+            snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 config_path.display().to_string(),
                 "Skipped an MCP entry because it has no usable transport.",
+                ActionBlockedReason::MalformedSource,
             ));
             continue;
         };

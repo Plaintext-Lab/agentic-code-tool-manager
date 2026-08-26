@@ -1,11 +1,11 @@
 use super::codex::CodexAdapter;
 use super::models::{
     ActionBlockedReason, ClientKind, InventoryItemType, InventoryRecord, InventoryScope,
-    ReloadGuidance, SourceKind, TrustState,
+    InventorySnapshot, InventoryWarning, ReloadGuidance, SourceKind, TrustState,
 };
 use super::{
     codex_home_path, discover_inventory, discover_inventory_with_codex_home,
-    discover_inventory_with_paths, ClientAdapter,
+    discover_inventory_with_paths, warning_source_restriction, ClientAdapter,
 };
 use std::fs;
 use std::path::Path;
@@ -520,6 +520,99 @@ fn action_revisions_cover_native_state_owners() {
 }
 
 #[test]
+fn claude_action_revisions_cover_managed_policy_sources() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let managed_settings = fixture.path().join("managed-settings.json");
+    let managed_mcp = fixture.path().join("managed-mcp.json");
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers":{"policy-sensitive":{"command":"server"}}}"#,
+    );
+    let revision = |snapshot: &InventorySnapshot| {
+        snapshot
+            .records
+            .iter()
+            .find(|record| record.client == ClientKind::Claude && record.name == "policy-sensitive")
+            .expect("Claude MCP should be discovered")
+            .action_capabilities
+            .source_revision
+            .clone()
+    };
+
+    let initial = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings.clone(),
+        managed_mcp.clone(),
+        Vec::new(),
+    );
+    let initial_revision = revision(&initial);
+
+    write(
+        &managed_settings,
+        r#"{"deniedMcpServers":["policy-sensitive"]}"#,
+    );
+    let policy_changed = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings.clone(),
+        managed_mcp.clone(),
+        Vec::new(),
+    );
+    let policy_revision = revision(&policy_changed);
+    assert_ne!(initial_revision, policy_revision);
+
+    write(
+        &managed_mcp,
+        r#"{"mcpServers":{"managed":{"command":"managed-server"}}}"#,
+    );
+    let managed_mcp_created = discover_inventory_with_paths(
+        home.clone(),
+        home.join(".codex"),
+        managed_settings,
+        managed_mcp,
+        Vec::new(),
+    );
+    assert_ne!(policy_revision, revision(&managed_mcp_created));
+}
+
+#[test]
+fn only_warnings_with_explicit_blocked_reasons_restrict_sources() {
+    let ordinary = InventoryWarning::new(
+        ClientKind::Codex,
+        "/fixture/unreadable-skill",
+        "Skipped an unreadable or cyclic skill path.",
+    );
+    assert_eq!(warning_source_restriction(&ordinary), None);
+
+    let malformed = InventoryWarning::blocked(
+        ClientKind::Codex,
+        "/fixture/config.toml",
+        "Skipped a malformed entry.",
+        ActionBlockedReason::MalformedSource,
+    );
+    assert_eq!(
+        warning_source_restriction(&malformed),
+        Some((
+            "/fixture/config.toml".to_string(),
+            ActionBlockedReason::MalformedSource
+        ))
+    );
+}
+
+#[test]
+fn first_source_restriction_preserves_its_specific_reason() {
+    let source_path = "/fixture/broken-link.json";
+    let mut snapshot = InventorySnapshot::new(0);
+    snapshot.restrict_source(source_path, ActionBlockedReason::BrokenSymlink);
+
+    let (_, restriction) = snapshot.composite_source_revision(&[source_path.to_string()]);
+
+    assert_eq!(restriction, Some(ActionBlockedReason::BrokenSymlink));
+}
+
+#[test]
 fn claude_project_trust_applies_to_project_skills() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");
@@ -644,6 +737,8 @@ trusted_hash = "sha256:620fb822b32c78c73a2c5817199b662d4e82c221d93dd1b85bf843cf8
     assert_eq!(hooks[0].is_effective, Some(true));
     assert_eq!(hooks[1].trust_state, TrustState::Untrusted);
     assert_eq!(hooks[1].is_effective, Some(false));
+    assert!(hooks[1].action_capabilities.enable.available);
+    assert!(hooks[1].action_capabilities.disable.available);
 }
 
 #[test]

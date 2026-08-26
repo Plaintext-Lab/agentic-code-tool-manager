@@ -431,7 +431,7 @@ impl InventorySnapshot {
             .entry(path.to_string())
             .or_insert_with(|| SourceRevisionState {
                 marker: "unobserved".to_string(),
-                restriction: Some(ActionBlockedReason::StateUnavailable),
+                restriction: None,
             });
         if state.restriction.is_none() {
             state.restriction = Some(reason);

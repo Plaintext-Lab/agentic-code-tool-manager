@@ -89,17 +89,9 @@ fn discover_inventory_with_paths(
         adapter.discover(&context, &mut snapshot);
         let source_restrictions: Vec<_> = snapshot.warnings[first_new_warning..]
             .iter()
-            .filter_map(|warning| {
-                Some((
-                    warning.client?,
-                    warning.source_path.clone(),
-                    warning
-                        .blocked_reason
-                        .unwrap_or(ActionBlockedReason::MalformedSource),
-                ))
-            })
+            .filter_map(warning_source_restriction)
             .collect();
-        for (_, source_path, reason) in &source_restrictions {
+        for (source_path, reason) in &source_restrictions {
             snapshot.restrict_source(source_path, *reason);
         }
         let source_revisions: Vec<_> = snapshot.records[first_new_record..]
@@ -137,6 +129,11 @@ fn discover_inventory_with_paths(
         );
     }
     snapshot.finish()
+}
+
+fn warning_source_restriction(warning: &InventoryWarning) -> Option<(String, ActionBlockedReason)> {
+    warning.client?;
+    Some((warning.source_path.clone(), warning.blocked_reason?))
 }
 
 fn existing_unique_roots(project_roots: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<InventoryWarning>) {

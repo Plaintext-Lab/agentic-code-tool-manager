@@ -121,11 +121,17 @@ impl ClientAdapter for ClaudeAdapter {
         record: &InventoryRecord,
     ) -> Vec<String> {
         let mut sources = vec![record.source_path.clone()];
-        if source_action_blocker(record).is_none()
-            && record.item_type == InventoryItemType::Mcp
-            && record.source_kind == SourceKind::ProjectConfig
+        if record.item_type == InventoryItemType::Mcp
+            && matches!(
+                record.source_kind,
+                SourceKind::UserConfig | SourceKind::ProjectConfig | SourceKind::LocalConfig
+            )
         {
-            sources.push(context.home_dir.join(".claude.json").display().to_string());
+            sources.push(context.claude_managed_settings_path.display().to_string());
+            sources.push(context.claude_managed_mcp_path.display().to_string());
+            if record.source_kind == SourceKind::ProjectConfig {
+                sources.push(context.home_dir.join(".claude.json").display().to_string());
+            }
         }
         sources
     }

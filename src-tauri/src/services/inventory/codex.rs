@@ -91,6 +91,14 @@ impl ClientAdapter for CodexAdapter {
                 | SourceKind::ProjectSkills
                 | SourceKind::LegacySkills
         ) {
+            if record.item_type == super::models::InventoryItemType::Hook && record.approval_pending
+            {
+                return InventoryActionCapabilities::pending_approval(
+                    true,
+                    super::models::ReloadGuidance::RestartClient,
+                    source_revision,
+                );
+            }
             return InventoryActionCapabilities::stateful(
                 record.enabled,
                 true,

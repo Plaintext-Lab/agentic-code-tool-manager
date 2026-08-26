@@ -1,7 +1,7 @@
 use super::config::apply_path_metadata;
 use super::models::{
-    effective_state, ClientKind, InventoryItemType, InventoryRecord, InventoryScope,
-    InventorySnapshot, InventoryWarning, SourceKind, TrustState,
+    effective_state, ActionBlockedReason, ClientKind, InventoryItemType, InventoryRecord,
+    InventoryScope, InventorySnapshot, InventoryWarning, SourceKind, TrustState,
 };
 use serde_json::{Map, Value};
 use std::path::Path;
@@ -91,10 +91,11 @@ fn push_hooks(
     let mut ordinal = 0;
     for (event, groups) in events {
         let Some(groups) = groups.as_array() else {
-            snapshot.warnings.push(InventoryWarning::new(
+            snapshot.warnings.push(InventoryWarning::blocked(
                 client,
                 config_path.display().to_string(),
                 "Skipped a hook event because its definition is not an array.",
+                ActionBlockedReason::MalformedSource,
             ));
             continue;
         };
@@ -176,19 +177,20 @@ fn push_hook_record(
         push_invalid_handler_warning(client, config_path, snapshot);
         return false;
     };
-    let (enabled, trust_state) = codex_state.map_or((enabled, trust_state), |state| {
-        codex_effective_state(
-            state,
-            event,
-            group,
-            handler,
-            handler_type,
-            group_index,
-            handler_index,
-            enabled,
-            trust_state,
-        )
-    });
+    let (enabled, trust_state, approval_pending) =
+        codex_state.map_or((enabled, trust_state, false), |state| {
+            codex_effective_state(
+                state,
+                event,
+                group,
+                handler,
+                handler_type,
+                group_index,
+                handler_index,
+                enabled,
+                trust_state,
+            )
+        });
     let mut record = InventoryRecord::new(
         client,
         InventoryItemType::Hook,
@@ -204,6 +206,7 @@ fn push_hook_record(
     record.enabled = Some(enabled);
     record.trust_state = trust_state;
     record.is_effective = effective_state(enabled, trust_state);
+    record.approval_pending = approval_pending;
     record.detail = Some(format!("{handler_type} handler"));
     snapshot.records.push(record);
     true
@@ -234,10 +237,11 @@ fn push_invalid_handler_warning(
     config_path: &Path,
     snapshot: &mut InventorySnapshot,
 ) {
-    snapshot.warnings.push(InventoryWarning::new(
+    snapshot.warnings.push(InventoryWarning::blocked(
         client,
         config_path.display().to_string(),
         "Skipped a hook handler because it has no usable payload.",
+        ActionBlockedReason::MalformedSource,
     ));
 }
 
@@ -258,10 +262,11 @@ pub fn push_toml_hooks(
         return;
     };
     let Ok(mut hooks_json) = serde_json::to_value(hooks) else {
-        snapshot.warnings.push(InventoryWarning::new(
+        snapshot.warnings.push(InventoryWarning::blocked(
             ClientKind::Codex,
             config_path.display().to_string(),
             "Could not inspect inline hook definitions.",
+            ActionBlockedReason::MalformedSource,
         ));
         return;
     };
