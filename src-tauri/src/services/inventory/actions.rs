@@ -76,6 +76,15 @@ fn set_inventory_record_enabled_with_writer(
         record,
         request.enabled,
     )?;
+    let mut expected = initial.clone();
+    expected.record_source_revision(&config_path, updated.as_bytes());
+    let (expected_revision, expected_restriction) = expected.composite_source_revision(&[
+        record.source_path.clone(),
+        config_path.display().to_string(),
+    ]);
+    if expected_restriction.is_some() {
+        return Err(InventoryActionError::StaleInventory);
+    }
 
     let current = discover_inventory_with_codex_home(
         home_dir.clone(),
@@ -94,12 +103,16 @@ fn set_inventory_record_enabled_with_writer(
         })?;
 
     let verified = discover_inventory_with_codex_home(home_dir, codex_home, project_roots);
-    let verified_state = resolve_record(&verified, &request.record_id)
-        .ok()
-        .and_then(|record| record.enabled);
-    if verified_state != Some(request.enabled) {
+    let verified_record = resolve_record(&verified, &request.record_id).ok();
+    if verified_record.and_then(|record| record.enabled) != Some(request.enabled) {
         restore_original(&source, updated.as_bytes())?;
         return Err(InventoryActionError::VerificationFailed);
+    }
+    if verified_record.and_then(|record| record.action_capabilities.source_revision.as_deref())
+        != Some(expected_revision.as_str())
+    {
+        restore_original(&source, updated.as_bytes())?;
+        return Err(InventoryActionError::StaleInventory);
     }
     Ok(verified)
 }
@@ -159,6 +172,21 @@ mod tests {
         }
     }
 
+    struct SkillMutatingWriter {
+        skill_file: PathBuf,
+    }
+
+    impl ConfigWriter for SkillMutatingWriter {
+        fn replace(&self, source: &ConfigSource, updated: &[u8]) -> Result<(), ConfigWriteError> {
+            AtomicConfigWriter.replace(source, updated)?;
+            fs::write(
+                &self.skill_file,
+                "---\nname: rollback\ndescription: Changed during write\n---\n",
+            )
+            .map_err(|_| ConfigWriteError::Io)
+        }
+    }
+
     #[test]
     fn write_failure_keeps_the_original_config() {
         let fixture = TempDir::new().unwrap();
@@ -197,6 +225,47 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error, InventoryActionError::WriteFailed);
+        assert_eq!(fs::read(config_path).unwrap(), original);
+    }
+
+    #[test]
+    fn skill_revision_change_during_write_restores_the_original_config() {
+        let fixture = TempDir::new().unwrap();
+        let home = fixture.path().join("home");
+        let codex_home = home.join(".codex");
+        let skill_file = home.join(".agents/skills/rollback/SKILL.md");
+        fs::create_dir_all(skill_file.parent().unwrap()).unwrap();
+        fs::write(
+            &skill_file,
+            "---\nname: rollback\ndescription: Rollback fixture\n---\n",
+        )
+        .unwrap();
+        let config_path = codex_home.join("config.toml");
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(&config_path, "# original remains\n").unwrap();
+        let original = fs::read(&config_path).unwrap();
+        let snapshot =
+            discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+        let record = snapshot
+            .records
+            .iter()
+            .find(|record| record.client == ClientKind::Codex && record.name == "rollback")
+            .unwrap();
+
+        let error = set_inventory_record_enabled_with_writer(
+            home,
+            codex_home,
+            Vec::new(),
+            InventoryActionRequest {
+                record_id: record.id.clone(),
+                enabled: false,
+                source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+            },
+            &SkillMutatingWriter { skill_file },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, InventoryActionError::StaleInventory);
         assert_eq!(fs::read(config_path).unwrap(), original);
     }
 }

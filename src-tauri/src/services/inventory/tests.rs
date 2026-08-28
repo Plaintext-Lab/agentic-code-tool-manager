@@ -1917,7 +1917,7 @@ fn codex_skill_action_rejects_a_stale_inventory_revision_without_writing() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn codex_skill_action_preserves_config_symlink_and_permissions() {
+fn codex_skill_action_rejects_a_symlink_backed_config() {
     use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 
     let fixture = TempDir::new().unwrap();
@@ -1933,9 +1933,9 @@ fn codex_skill_action_preserves_config_symlink_and_permissions() {
     symlink(&config_target, &config_link).unwrap();
     let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
     let record = codex_skill(&initial, "shared-skill", None);
-    let link_inode = fs::symlink_metadata(&config_link).unwrap().ino();
+    let original = fs::read(&config_target).unwrap();
 
-    set_inventory_record_enabled_with_paths(
+    let error = set_inventory_record_enabled_with_paths(
         home,
         codex_home,
         Vec::new(),
@@ -1945,15 +1945,13 @@ fn codex_skill_action_preserves_config_symlink_and_permissions() {
             source_revision: record.action_capabilities.source_revision.clone().unwrap(),
         },
     )
-    .unwrap();
+    .unwrap_err();
 
+    assert_eq!(error, InventoryActionError::UnsafeConfiguration);
     let link_metadata = fs::symlink_metadata(&config_link).unwrap();
     assert!(link_metadata.file_type().is_symlink());
-    assert_eq!(link_metadata.ino(), link_inode);
     assert_eq!(fs::metadata(&config_target).unwrap().mode() & 0o777, 0o600);
-    assert!(fs::read_to_string(&config_target)
-        .unwrap()
-        .contains("# keep this comment"));
+    assert_eq!(fs::read(config_target).unwrap(), original);
 }
 
 #[test]

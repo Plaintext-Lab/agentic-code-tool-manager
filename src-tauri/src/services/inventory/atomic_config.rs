@@ -11,91 +11,27 @@ pub(super) struct ConfigSource {
     pub(super) target_path: PathBuf,
     pub(super) contents: Option<Vec<u8>>,
     #[cfg(target_os = "macos")]
-    symlink_guard: Option<ConfigSymlinkGuard>,
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Clone)]
-struct ConfigSymlinkGuard {
-    link_path: PathBuf,
-    link_target: PathBuf,
-    resolved_target: PathBuf,
-    device: u64,
-    inode: u64,
-}
-
-#[cfg(target_os = "macos")]
-impl ConfigSymlinkGuard {
-    fn capture(
-        link_path: &Path,
-        metadata: &fs::Metadata,
-        resolved_target: PathBuf,
-    ) -> Result<Self, InventoryActionError> {
-        use std::os::unix::fs::MetadataExt;
-
-        let link_target =
-            fs::read_link(link_path).map_err(|_| InventoryActionError::UnsafeConfiguration)?;
-        Ok(Self {
-            link_path: link_path.to_path_buf(),
-            link_target,
-            resolved_target,
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        })
-    }
-
-    fn is_current(&self) -> bool {
-        use std::os::unix::fs::MetadataExt;
-
-        let Ok(metadata) = fs::symlink_metadata(&self.link_path) else {
-            return false;
-        };
-        metadata.file_type().is_symlink()
-            && metadata.dev() == self.device
-            && metadata.ino() == self.inode
-            && fs::read_link(&self.link_path).is_ok_and(|target| target == self.link_target)
-            && fs::canonicalize(&self.link_path).is_ok_and(|target| target == self.resolved_target)
-    }
+    identity: Option<platform::FileIdentity>,
 }
 
 impl ConfigSource {
     pub(super) fn read(config_path: &Path) -> Result<Self, InventoryActionError> {
         match fs::symlink_metadata(config_path) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                let target_path = fs::canonicalize(config_path)
-                    .map_err(|_| InventoryActionError::UnsafeConfiguration)?;
-                let target_metadata = fs::metadata(&target_path)
-                    .map_err(|_| InventoryActionError::UnsafeConfiguration)?;
-                if !target_metadata.is_file() {
-                    return Err(InventoryActionError::UnsafeConfiguration);
-                }
-                let contents = fs::read(&target_path)
-                    .map_err(|_| InventoryActionError::UnsafeConfiguration)?;
-                #[cfg(target_os = "macos")]
-                let symlink_guard = Some(ConfigSymlinkGuard::capture(
-                    config_path,
-                    &metadata,
-                    target_path.clone(),
-                )?);
-                let source = Self {
-                    target_path,
-                    contents: Some(contents),
-                    #[cfg(target_os = "macos")]
-                    symlink_guard,
-                };
-                source
-                    .validate_config_entry()
-                    .map_err(|_| InventoryActionError::UnsafeConfiguration)?;
-                Ok(source)
+                Err(InventoryActionError::UnsafeConfiguration)
             }
             Ok(metadata) if metadata.is_file() => {
+                #[cfg(target_os = "macos")]
+                let (contents, identity) = platform::read_regular_file(config_path)
+                    .map_err(|_| InventoryActionError::UnsafeConfiguration)?;
+                #[cfg(not(target_os = "macos"))]
                 let contents =
                     fs::read(config_path).map_err(|_| InventoryActionError::UnsafeConfiguration)?;
                 Ok(Self {
                     target_path: config_path.to_path_buf(),
                     contents: Some(contents),
                     #[cfg(target_os = "macos")]
-                    symlink_guard: None,
+                    identity: Some(identity),
                 })
             }
             Ok(_) => Err(InventoryActionError::UnsafeConfiguration),
@@ -103,7 +39,7 @@ impl ConfigSource {
                 target_path: config_path.to_path_buf(),
                 contents: None,
                 #[cfg(target_os = "macos")]
-                symlink_guard: None,
+                identity: None,
             }),
             Err(_) => Err(InventoryActionError::UnsafeConfiguration),
         }
@@ -111,12 +47,14 @@ impl ConfigSource {
 
     fn validate_config_entry(&self) -> Result<(), ConfigWriteError> {
         #[cfg(target_os = "macos")]
-        if self
-            .symlink_guard
-            .as_ref()
-            .is_some_and(|guard| !guard.is_current())
-        {
-            return Err(ConfigWriteError::SourceChanged);
+        match self.identity {
+            Some(identity) if !platform::path_matches_identity(&self.target_path, identity) => {
+                return Err(ConfigWriteError::SourceChanged);
+            }
+            None if fs::symlink_metadata(&self.target_path).is_ok() => {
+                return Err(ConfigWriteError::SourceChanged);
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -138,6 +76,18 @@ pub(super) struct AtomicConfigWriter;
 impl ConfigWriter for AtomicConfigWriter {
     fn replace(&self, source: &ConfigSource, updated: &[u8]) -> Result<(), ConfigWriteError> {
         source.validate_config_entry()?;
+        #[cfg(target_os = "macos")]
+        let current = match source.identity {
+            Some(expected) => {
+                let (contents, actual) = platform::read_regular_file(&source.target_path)?;
+                if actual != expected {
+                    return Err(ConfigWriteError::SourceChanged);
+                }
+                Some(contents)
+            }
+            None => None,
+        };
+        #[cfg(not(target_os = "macos"))]
         let current = match fs::read(&source.target_path) {
             Ok(contents) => Some(contents),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -150,11 +100,7 @@ impl ConfigWriter for AtomicConfigWriter {
         let parent = source.target_path.parent().ok_or(ConfigWriteError::Io)?;
         fs::create_dir_all(parent).map_err(|_| ConfigWriteError::Io)?;
         let temp_path = sidecar_path(&source.target_path, "tmp")?;
-        let result = write_and_replace(&temp_path, &source.target_path, source, updated);
-        if result.is_err() {
-            let _ = fs::remove_file(&temp_path);
-        }
-        result
+        write_and_replace(&temp_path, &source.target_path, source, updated)
     }
 }
 
@@ -172,26 +118,26 @@ fn write_and_replace(
         options.mode(0o600);
     }
     let mut temp_file = options.open(temp_path).map_err(|_| ConfigWriteError::Io)?;
-    temp_file
-        .write_all(updated)
-        .and_then(|_| temp_file.sync_all())
-        .map_err(|_| ConfigWriteError::Io)?;
-    drop(temp_file);
-    if source.contents.is_some() {
-        platform::copy_security_metadata(target_path, temp_path)?;
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(temp_path)
-            .and_then(|file| file.sync_all())
+    let temp_identity = platform::file_identity_from_file(&temp_file)?;
+    let result = (|| {
+        temp_file
+            .write_all(updated)
+            .and_then(|_| temp_file.sync_all())
             .map_err(|_| ConfigWriteError::Io)?;
-        source.validate_config_entry()?;
-        replace_existing_guarded(temp_path, target_path, source, updated)?;
-    } else {
-        platform::commit_new(temp_path, target_path)?;
+        drop(temp_file);
+        if source.contents.is_some() {
+            source.validate_config_entry()?;
+            replace_existing_guarded(temp_path, target_path, source, updated, temp_identity)?;
+        } else {
+            platform::commit_new(temp_path, target_path)?;
+        }
+        sync_parent(target_path);
+        Ok(())
+    })();
+    if matches!(&result, Err(error) if *error != ConfigWriteError::RollbackFailed) {
+        let _ = platform::remove_if_identity(temp_path, temp_identity);
     }
-    sync_parent(target_path);
-    Ok(())
+    result
 }
 
 fn replace_existing_guarded(
@@ -199,30 +145,48 @@ fn replace_existing_guarded(
     target_path: &Path,
     source: &ConfigSource,
     updated: &[u8],
+    temp_identity: platform::FileIdentity,
 ) -> Result<(), ConfigWriteError> {
     let backup_path = sidecar_path(target_path, "backup")?;
-    platform::replace_existing(target_path, temp_path, &backup_path)?;
-    let replaced = match fs::read(&backup_path) {
+    #[cfg(target_os = "macos")]
+    let source_identity = source.identity.ok_or(ConfigWriteError::SourceChanged)?;
+    #[cfg(not(target_os = "macos"))]
+    let source_identity = platform::file_identity(target_path)?;
+    platform::replace_existing(
+        target_path,
+        temp_path,
+        &backup_path,
+        source_identity,
+        temp_identity,
+    )?;
+    let (replaced, backup_identity) = match platform::read_regular_file(&backup_path) {
         Ok(replaced) => replaced,
         Err(_) => {
             rollback_if_update_is_current(target_path, &backup_path, updated)?;
             return Err(ConfigWriteError::RollbackFailed);
         }
     };
+    if backup_identity != source_identity {
+        rollback_if_update_is_current(target_path, &backup_path, updated)?;
+        return Err(ConfigWriteError::SourceChanged);
+    }
     if source.contents.as_deref() == Some(replaced.as_slice()) {
-        if platform::copy_security_metadata(&backup_path, target_path).is_err()
-            || fs::File::open(target_path)
-                .and_then(|file| file.sync_all())
-                .is_err()
+        if platform::copy_security_metadata_guarded(
+            &backup_path,
+            source_identity,
+            target_path,
+            temp_identity,
+        )
+        .is_err()
         {
             rollback_if_update_is_current(target_path, &backup_path, updated)?;
             return Err(ConfigWriteError::Io);
         }
-        if let Err(error) = source.validate_config_entry() {
+        if !platform::path_matches_identity(target_path, temp_identity) {
             rollback_if_update_is_current(target_path, &backup_path, updated)?;
-            return Err(error);
+            return Err(ConfigWriteError::SourceChanged);
         }
-        if fs::remove_file(&backup_path).is_err() {
+        if platform::remove_if_identity(&backup_path, source_identity).is_err() {
             rollback_if_update_is_current(target_path, &backup_path, updated)?;
             return Err(ConfigWriteError::Io);
         }
@@ -272,12 +236,11 @@ pub(super) fn restore_original(
 ) -> Result<(), InventoryActionError> {
     match source.contents.as_deref() {
         Some(original) => {
-            let written_source = ConfigSource {
-                target_path: source.target_path.clone(),
-                contents: Some(written.to_vec()),
-                #[cfg(target_os = "macos")]
-                symlink_guard: None,
-            };
+            let written_source = ConfigSource::read(&source.target_path)
+                .map_err(|_| InventoryActionError::RollbackFailed)?;
+            if written_source.contents.as_deref() != Some(written) {
+                return Err(InventoryActionError::RollbackFailed);
+            }
             AtomicConfigWriter
                 .replace(&written_source, original)
                 .map_err(|_| InventoryActionError::RollbackFailed)
@@ -440,16 +403,33 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_config_symlink_retargeted_after_validation() {
+    fn rejects_config_symlinks_before_writing() {
         use std::os::unix::fs::symlink;
 
         let fixture = TempDir::new().unwrap();
         let original_target = fixture.path().join("original.toml");
-        let newer_target = fixture.path().join("newer.toml");
         let config_path = fixture.path().join("config.toml");
         fs::write(&original_target, "# original\n").unwrap();
-        fs::write(&newer_target, "# newer\n").unwrap();
         symlink(&original_target, &config_path).unwrap();
+
+        let result = ConfigSource::read(&config_path);
+
+        assert!(matches!(
+            result,
+            Err(InventoryActionError::UnsafeConfiguration)
+        ));
+        assert_eq!(fs::read(original_target).unwrap(), b"# original\n");
+    }
+
+    #[test]
+    fn rejects_a_config_replaced_by_a_symlink_after_validation() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        let newer_target = fixture.path().join("newer.toml");
+        fs::write(&config_path, "# original\n").unwrap();
+        fs::write(&newer_target, "# newer\n").unwrap();
         let source = ConfigSource::read(&config_path).unwrap();
         fs::remove_file(&config_path).unwrap();
         symlink(&newer_target, &config_path).unwrap();
@@ -459,8 +439,34 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error, ConfigWriteError::SourceChanged);
-        assert_eq!(fs::read(original_target).unwrap(), b"# original\n");
         assert_eq!(fs::read(newer_target).unwrap(), b"# newer\n");
+    }
+
+    #[test]
+    fn preserves_both_files_when_backup_staging_fails() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        let replacement_path = fixture.path().join(".config.prepared.tmp");
+        let backup_path = fixture.path().join("occupied-backup");
+        fs::write(&config_path, "# original\n").unwrap();
+        fs::write(&replacement_path, "# replacement\n").unwrap();
+        fs::create_dir(&backup_path).unwrap();
+
+        let target_identity = platform::file_identity(&config_path).unwrap();
+        let replacement_identity = platform::file_identity(&replacement_path).unwrap();
+        let error = platform::replace_existing(
+            &config_path,
+            &replacement_path,
+            &backup_path,
+            target_identity,
+            replacement_identity,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ConfigWriteError::RollbackFailed);
+        assert_eq!(fs::read(config_path).unwrap(), b"# replacement\n");
+        assert_eq!(fs::read(replacement_path).unwrap(), b"# original\n");
+        assert!(backup_path.is_dir());
     }
 
     #[test]
@@ -513,16 +519,51 @@ mod tests {
         fs::write(&temp_path, "# replacement\n").unwrap();
         xattr::set(&config_path, attribute, b"scanned").unwrap();
         let source = ConfigSource::read(&config_path).unwrap();
-        platform::copy_security_metadata(&config_path, &temp_path).unwrap();
         xattr::set(&config_path, attribute, b"changed-after-copy").unwrap();
 
-        replace_existing_guarded(&temp_path, &config_path, &source, b"# replacement\n").unwrap();
+        let temp_identity = platform::file_identity(&temp_path).unwrap();
+        replace_existing_guarded(
+            &temp_path,
+            &config_path,
+            &source,
+            b"# replacement\n",
+            temp_identity,
+        )
+        .unwrap();
 
         assert_eq!(fs::read(&config_path).unwrap(), b"# replacement\n");
         assert_eq!(
             xattr::get(config_path, attribute).unwrap().unwrap(),
             b"changed-after-copy"
         );
+    }
+
+    #[test]
+    fn never_copies_metadata_to_a_newer_target_file() {
+        let fixture = TempDir::new().unwrap();
+        let source_path = fixture.path().join("source.toml");
+        let destination_path = fixture.path().join("destination.toml");
+        let displaced_path = fixture.path().join("displaced.toml");
+        let attribute = "com.plaintext-lab.inventory-target-race-test";
+        fs::write(&source_path, "# source\n").unwrap();
+        fs::write(&destination_path, "# prepared\n").unwrap();
+        xattr::set(&source_path, attribute, b"protected").unwrap();
+        let source_identity = platform::file_identity(&source_path).unwrap();
+        let destination_identity = platform::file_identity(&destination_path).unwrap();
+        fs::rename(&destination_path, &displaced_path).unwrap();
+        fs::write(&destination_path, "# concurrent\n").unwrap();
+
+        let error = platform::copy_security_metadata_guarded(
+            &source_path,
+            source_identity,
+            &destination_path,
+            destination_identity,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ConfigWriteError::SourceChanged);
+        assert_eq!(fs::read(destination_path).unwrap(), b"# concurrent\n");
+        assert_eq!(xattr::get(displaced_path, attribute).unwrap(), None);
     }
 
     #[cfg(unix)]
