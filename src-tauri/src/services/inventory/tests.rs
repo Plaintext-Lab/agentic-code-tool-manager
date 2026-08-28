@@ -2168,6 +2168,7 @@ fn codex_path_normalization_does_not_cross_a_symlink_parent() {
     ));
 }
 
+#[cfg(target_os = "macos")]
 fn codex_skill<'a>(
     snapshot: &'a InventorySnapshot,
     name: &str,

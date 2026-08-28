@@ -191,14 +191,6 @@ pub(super) fn restore_backup_if_matches(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(super) fn restore_quarantine_without_overwrite(
-    _quarantine: &Path,
-    _target: &Path,
-) -> Result<(), ConfigWriteError> {
-    Err(ConfigWriteError::RollbackFailed)
-}
-
-#[cfg(not(target_os = "macos"))]
 pub(super) fn guarded_remove(
     _target: &Path,
     _expected: &[u8],
