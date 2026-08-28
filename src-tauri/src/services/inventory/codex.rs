@@ -8,11 +8,11 @@ use super::models::{
 };
 use super::plugins::discover_codex_plugins;
 use super::skills::{
-    codex_disabled_skill_paths, codex_skill_config_is_editable, discover_project_skill_roots,
-    scan_skill_root,
+    codex_disabled_skill_paths, codex_paths_match, codex_skill_config_is_editable,
+    discover_project_skill_roots, scan_skill_root,
 };
 use super::ClientAdapter;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct CodexAdapter;
 
@@ -78,12 +78,45 @@ impl ClientAdapter for CodexAdapter {
             snapshot,
         );
         let skill_config_is_editable = codex_skill_config_is_editable(global_config.as_ref());
+        let codex_skill_sources: Vec<(PathBuf, Option<PathBuf>, Option<PathBuf>)> = snapshot
+            .records
+            .iter()
+            .filter(|record| {
+                record.client == ClientKind::Codex
+                    && record.item_type == super::models::InventoryItemType::Skill
+            })
+            .map(|record| {
+                (
+                    PathBuf::from(&record.original_path),
+                    record.resolved_path.as_deref().map(PathBuf::from),
+                    codex_skill_relative_path(context, record),
+                )
+            })
+            .collect();
         for record in snapshot.records.iter_mut().filter(|record| {
             record.client == ClientKind::Codex
                 && record.item_type == super::models::InventoryItemType::Skill
         }) {
+            let record_path = Path::new(&record.original_path);
+            let record_resolved_path = record.resolved_path.as_deref().map(Path::new);
+            let record_relative_path = codex_skill_relative_path(context, record);
+            let matching_source_count = codex_skill_sources
+                .iter()
+                .filter(
+                    |(candidate_path, candidate_resolved_path, candidate_relative_path)| {
+                        codex_paths_match(candidate_path, record_path)
+                            || candidate_relative_path.as_ref() == record_relative_path.as_ref()
+                                && candidate_relative_path.is_some()
+                                && candidate_resolved_path.as_deref().is_some_and(|candidate| {
+                                    record_resolved_path
+                                        .is_some_and(|record| codex_paths_match(candidate, record))
+                                })
+                    },
+                )
+                .count();
             if !skill_config_is_editable
                 || codex_skill_config_match_count(global_config.as_ref(), record) > 1
+                || matching_source_count > 1
             {
                 record.restrict_actions(ActionBlockedReason::MalformedSource);
             }
@@ -163,12 +196,34 @@ impl ClientAdapter for CodexAdapter {
     }
 }
 
+fn codex_skill_relative_path(
+    context: &DiscoveryContext,
+    record: &InventoryRecord,
+) -> Option<PathBuf> {
+    let root = match (record.source_kind, record.scope) {
+        (SourceKind::UserSkills, InventoryScope::User) => context.home_dir.join(".agents/skills"),
+        (SourceKind::ProjectSkills, InventoryScope::Project) => {
+            Path::new(record.project_path.as_deref()?).join(".agents/skills")
+        }
+        (SourceKind::LegacySkills, InventoryScope::Legacy) => context.codex_home.join("skills"),
+        (SourceKind::LegacySkills, InventoryScope::Project) => {
+            Path::new(record.project_path.as_deref()?).join(".codex/skills")
+        }
+        (SourceKind::AdminSkills, InventoryScope::Admin) => PathBuf::from("/etc/codex/skills"),
+        _ => return None,
+    };
+    Path::new(&record.original_path)
+        .strip_prefix(root)
+        .ok()
+        .map(PathBuf::from)
+}
+
 impl CodexAdapter {
     fn discover_skills(
         &self,
         context: &DiscoveryContext,
         global_config: Option<&toml::Value>,
-        disabled_skills: &std::collections::HashSet<String>,
+        disabled_skills: &[PathBuf],
         snapshot: &mut InventorySnapshot,
     ) {
         scan_skill_root(

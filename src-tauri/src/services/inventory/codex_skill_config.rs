@@ -1,5 +1,6 @@
 use super::actions::InventoryActionError;
 use super::models::InventoryRecord;
+use super::skills::codex_paths_match;
 use std::path::{Path, PathBuf};
 use toml_edit::{value, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
@@ -189,10 +190,13 @@ fn skill_path_aliases(record: &InventoryRecord) -> Vec<PathBuf> {
 }
 
 fn configured_path_matches(configured: &Path, aliases: &[PathBuf]) -> bool {
-    if aliases.iter().any(|alias| alias == configured) {
+    if aliases
+        .iter()
+        .any(|alias| codex_paths_match(alias, configured))
+    {
         return true;
     }
     aliases
         .iter()
-        .any(|alias| alias == &configured.join("SKILL.md"))
+        .any(|alias| codex_paths_match(alias, &configured.join("SKILL.md")))
 }

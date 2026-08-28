@@ -133,6 +133,14 @@ fn replace_existing_guarded(
         }
     };
     if source.contents.as_deref() == Some(replaced.as_slice()) {
+        if platform::copy_security_metadata(&backup_path, target_path).is_err()
+            || fs::File::open(target_path)
+                .and_then(|file| file.sync_all())
+                .is_err()
+        {
+            rollback_if_update_is_current(target_path, &backup_path, updated)?;
+            return Err(ConfigWriteError::Io);
+        }
         if fs::remove_file(&backup_path).is_err() {
             rollback_if_update_is_current(target_path, &backup_path, updated)?;
             return Err(ConfigWriteError::Io);
@@ -363,6 +371,28 @@ mod tests {
         assert_eq!(
             xattr::get(config_path, attribute).unwrap().unwrap(),
             b"protected"
+        );
+    }
+
+    #[test]
+    fn preserves_metadata_changed_after_the_replacement_is_prepared() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        let temp_path = fixture.path().join(".config.prepared.tmp");
+        let attribute = "com.plaintext-lab.inventory-race-test";
+        fs::write(&config_path, "# original\n").unwrap();
+        fs::write(&temp_path, "# replacement\n").unwrap();
+        xattr::set(&config_path, attribute, b"scanned").unwrap();
+        let source = ConfigSource::read(&config_path).unwrap();
+        platform::copy_security_metadata(&config_path, &temp_path).unwrap();
+        xattr::set(&config_path, attribute, b"changed-after-copy").unwrap();
+
+        replace_existing_guarded(&temp_path, &config_path, &source, b"# replacement\n").unwrap();
+
+        assert_eq!(fs::read(&config_path).unwrap(), b"# replacement\n");
+        assert_eq!(
+            xattr::get(config_path, attribute).unwrap().unwrap(),
+            b"changed-after-copy"
         );
     }
 

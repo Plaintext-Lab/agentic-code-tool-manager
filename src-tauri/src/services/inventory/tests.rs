@@ -2039,6 +2039,74 @@ fn ambiguous_codex_skill_configuration_is_read_only() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn duplicate_codex_skill_sources_are_read_only() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let skill_file = home.join(".agents/skills/duplicate-source/SKILL.md");
+    write_skill(&skill_file);
+
+    let initial = discover_inventory_with_codex_home(home.clone(), codex_home, vec![home.clone()]);
+    let matching_records: Vec<_> = initial
+        .records
+        .iter()
+        .filter(|record| {
+            record.client == ClientKind::Codex
+                && record.item_type == InventoryItemType::Skill
+                && record.name == "shared-skill"
+        })
+        .collect();
+
+    assert_eq!(matching_records.len(), 2);
+    for record in matching_records {
+        assert!(
+            !record.action_capabilities.enable.available,
+            "unexpected actionable record: {record:?}"
+        );
+        assert!(
+            !record.action_capabilities.disable.available,
+            "unexpected actionable record: {record:?}"
+        );
+        assert_eq!(
+            record.action_capabilities.disable.blocked_reason,
+            Some(ActionBlockedReason::MalformedSource)
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_skill_config_matches_the_volume_case_and_unicode_rules() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let skill_file = home.join(".agents/skills/CaféSkill/SKILL.md");
+    write_skill(&skill_file);
+    let configured_folder = home.join(".agents/skills/caféskill");
+    if std::fs::symlink_metadata(configured_folder.join("SKILL.md")).is_err() {
+        return;
+    }
+    assert!(super::skills::codex_paths_match(
+        &configured_folder.join("SKILL.md"),
+        &skill_file
+    ));
+    write(
+        &codex_home.join("config.toml"),
+        &format!(
+            "[[skills.config]]\npath = '{}'\nenabled = false\n",
+            configured_folder.display()
+        ),
+    );
+
+    let initial = discover_inventory_with_codex_home(home, codex_home, Vec::new());
+    let record = codex_skill(&initial, "shared-skill", None);
+
+    assert_eq!(record.enabled, Some(false));
+    assert!(record.action_capabilities.enable.available);
+}
+
 fn codex_skill<'a>(
     snapshot: &'a InventorySnapshot,
     name: &str,
