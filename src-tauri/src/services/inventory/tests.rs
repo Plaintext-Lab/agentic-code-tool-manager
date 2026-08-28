@@ -841,7 +841,10 @@ trusted_hash = "sha256:620fb822b32c78c73a2c5817199b662d4e82c221d93dd1b85bf843cf8
     assert_eq!(hooks[1].trust_state, TrustState::Untrusted);
     assert_eq!(hooks[1].is_effective, Some(false));
     assert!(!hooks[1].action_capabilities.enable.available);
-    assert!(hooks[1].action_capabilities.disable.available);
+    assert_eq!(
+        hooks[1].action_capabilities.disable.available,
+        cfg!(target_os = "macos")
+    );
 }
 
 #[test]
