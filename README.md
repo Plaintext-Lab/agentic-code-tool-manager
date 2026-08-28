@@ -77,7 +77,6 @@ Download from [Releases](https://github.com/tylergraydev/claude-code-tool-manage
 
 | Platform | Download |
 |----------|----------|
-| Windows | `.msi` or `.exe` |
 | macOS | `.dmg` (Intel & Apple Silicon) |
 | Linux | `.AppImage` or `.deb` |
 
