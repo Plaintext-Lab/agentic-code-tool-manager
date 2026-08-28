@@ -15,7 +15,7 @@ mod resolver;
 pub fn discover_codex_plugins(
     context: &DiscoveryContext,
     config: Option<&toml::Value>,
-    disabled_skills: &HashSet<String>,
+    disabled_skills: &[PathBuf],
     hooks_enabled: bool,
     snapshot: &mut InventorySnapshot,
 ) {
@@ -62,7 +62,7 @@ fn discover_plugin_components(
     enabled: bool,
     hooks_enabled: bool,
     config: Option<&toml::Value>,
-    disabled_skills: &HashSet<String>,
+    disabled_skills: &[PathBuf],
     snapshot: &mut InventorySnapshot,
 ) {
     let manifest_path = [

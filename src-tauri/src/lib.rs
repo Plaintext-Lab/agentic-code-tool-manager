@@ -234,8 +234,9 @@ pub fn run() {
             commands::config::backup_configs,
             // Scanner Commands
             commands::scanner::scan_claude_directory,
-            // Read-only cross-client inventory
+            // Cross-client inventory
             commands::inventory::get_tool_inventory,
+            commands::inventory::set_inventory_record_enabled,
             // Claude.json Commands
             commands::claude_json::get_claude_json_mcps,
             commands::claude_json::get_claude_json_projects,

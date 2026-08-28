@@ -1,3 +1,4 @@
+use super::codex_skill_config::codex_skill_config_match_count;
 use super::config::{push_toml_mcps, read_json, read_toml};
 use super::hooks::{push_codex_json_hooks, push_toml_hooks};
 use super::models::{
@@ -6,9 +7,12 @@ use super::models::{
     TrustState,
 };
 use super::plugins::discover_codex_plugins;
-use super::skills::{codex_disabled_skill_paths, discover_project_skill_roots, scan_skill_root};
+use super::skills::{
+    codex_disabled_skill_paths, codex_paths_match, codex_skill_config_is_editable,
+    discover_project_skill_roots, scan_skill_root,
+};
 use super::ClientAdapter;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct CodexAdapter;
 
@@ -73,6 +77,51 @@ impl ClientAdapter for CodexAdapter {
             global_hooks_enabled,
             snapshot,
         );
+        let skill_config_is_editable = codex_skill_config_is_editable(global_config.as_ref())
+            && codex_skill_config_path_is_editable(&global_config_path);
+        let codex_skill_sources: Vec<(PathBuf, Option<PathBuf>, Option<PathBuf>)> = snapshot
+            .records
+            .iter()
+            .filter(|record| {
+                record.client == ClientKind::Codex
+                    && record.item_type == super::models::InventoryItemType::Skill
+            })
+            .map(|record| {
+                (
+                    PathBuf::from(&record.original_path),
+                    record.resolved_path.as_deref().map(PathBuf::from),
+                    codex_skill_relative_path(context, record),
+                )
+            })
+            .collect();
+        for record in snapshot.records.iter_mut().filter(|record| {
+            record.client == ClientKind::Codex
+                && record.item_type == super::models::InventoryItemType::Skill
+        }) {
+            let record_path = Path::new(&record.original_path);
+            let record_resolved_path = record.resolved_path.as_deref().map(Path::new);
+            let record_relative_path = codex_skill_relative_path(context, record);
+            let matching_source_count = codex_skill_sources
+                .iter()
+                .filter(
+                    |(candidate_path, candidate_resolved_path, candidate_relative_path)| {
+                        codex_paths_match(candidate_path, record_path)
+                            || candidate_relative_path.as_ref() == record_relative_path.as_ref()
+                                && candidate_relative_path.is_some()
+                                && candidate_resolved_path.as_deref().is_some_and(|candidate| {
+                                    record_resolved_path
+                                        .is_some_and(|record| codex_paths_match(candidate, record))
+                                })
+                    },
+                )
+                .count();
+            if !skill_config_is_editable
+                || codex_skill_config_match_count(global_config.as_ref(), record) > 1
+                || matching_source_count > 1
+            {
+                record.restrict_actions(ActionBlockedReason::MalformedSource);
+            }
+        }
     }
 
     fn action_capabilities(
@@ -82,6 +131,13 @@ impl ClientAdapter for CodexAdapter {
     ) -> InventoryActionCapabilities {
         if let Some(reason) = source_action_blocker(record) {
             return InventoryActionCapabilities::blocked(reason, Some(source_revision));
+        }
+        if record.item_type == super::models::InventoryItemType::Skill && !cfg!(target_os = "macos")
+        {
+            return InventoryActionCapabilities::blocked(
+                ActionBlockedReason::UnsupportedByClient,
+                Some(source_revision),
+            );
         }
         if matches!(
             record.source_kind,
@@ -141,12 +197,51 @@ impl ClientAdapter for CodexAdapter {
     }
 }
 
+fn codex_skill_config_path_is_editable(config_path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        match std::fs::symlink_metadata(config_path) {
+            Ok(metadata) => metadata.is_file() && metadata.nlink() == 1,
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = config_path;
+        true
+    }
+}
+
+fn codex_skill_relative_path(
+    context: &DiscoveryContext,
+    record: &InventoryRecord,
+) -> Option<PathBuf> {
+    let root = match (record.source_kind, record.scope) {
+        (SourceKind::UserSkills, InventoryScope::User) => context.home_dir.join(".agents/skills"),
+        (SourceKind::ProjectSkills, InventoryScope::Project) => {
+            Path::new(record.project_path.as_deref()?).join(".agents/skills")
+        }
+        (SourceKind::LegacySkills, InventoryScope::Legacy) => context.codex_home.join("skills"),
+        (SourceKind::LegacySkills, InventoryScope::Project) => {
+            Path::new(record.project_path.as_deref()?).join(".codex/skills")
+        }
+        (SourceKind::AdminSkills, InventoryScope::Admin) => PathBuf::from("/etc/codex/skills"),
+        _ => return None,
+    };
+    Path::new(&record.original_path)
+        .strip_prefix(root)
+        .ok()
+        .map(PathBuf::from)
+}
+
 impl CodexAdapter {
     fn discover_skills(
         &self,
         context: &DiscoveryContext,
         global_config: Option<&toml::Value>,
-        disabled_skills: &std::collections::HashSet<String>,
+        disabled_skills: &[PathBuf],
         snapshot: &mut InventorySnapshot,
     ) {
         scan_skill_root(

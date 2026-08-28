@@ -671,6 +671,7 @@ dependencies = [
  "fern",
  "futures",
  "insta",
+ "libc",
  "log",
  "once_cell",
  "pretty_assertions",
@@ -709,6 +710,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "wiremock",
+ "xattr",
 ]
 
 [[package]]

@@ -1,6 +1,9 @@
+mod actions;
+mod atomic_config;
 mod claude;
 mod claude_policy;
 mod codex;
+mod codex_skill_config;
 mod config;
 mod cursor;
 mod hooks;
@@ -8,6 +11,7 @@ mod models;
 mod plugins;
 mod skills;
 
+pub use actions::{InventoryActionError, InventoryActionRequest};
 pub use models::InventorySnapshot;
 
 use claude::ClaudeAdapter;
@@ -39,6 +43,16 @@ trait ClientAdapter {
 pub fn discover_inventory(home_dir: PathBuf, project_roots: Vec<PathBuf>) -> InventorySnapshot {
     let codex_home = codex_home_path(&home_dir, std::env::var_os("CODEX_HOME"));
     discover_inventory_with_codex_home(home_dir, codex_home, project_roots)
+}
+
+/// Applies a documented native state change to one freshly resolved inventory record.
+pub fn set_inventory_record_enabled(
+    home_dir: PathBuf,
+    project_roots: Vec<PathBuf>,
+    request: InventoryActionRequest,
+) -> Result<InventorySnapshot, InventoryActionError> {
+    let codex_home = codex_home_path(&home_dir, std::env::var_os("CODEX_HOME"));
+    actions::set_inventory_record_enabled_with_paths(home_dir, codex_home, project_roots, request)
 }
 
 fn codex_home_path(home_dir: &Path, configured_home: Option<OsString>) -> PathBuf {
