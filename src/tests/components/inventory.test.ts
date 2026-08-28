@@ -33,6 +33,20 @@ const baseRecord: InventoryRecord = {
 	}
 };
 
+const hookRecord: InventoryRecord = {
+	...baseRecord,
+	id: 'codex:hook:user:stop:0',
+	itemType: 'hook',
+	name: 'Stop hook',
+	sourcePath: '/Users/test/.codex/hooks.json',
+	originalPath: '/Users/test/.codex/hooks.json',
+	resolvedPath: '/Users/test/.codex/hooks.json',
+	trustState: 'untrusted',
+	isEffective: false,
+	protectedFields: ['Hook contents'],
+	detail: 'command handler'
+};
+
 describe('InventoryTable', () => {
 	it('offers the eligible Codex MCP action and passes only the discovered record', async () => {
 		const actions: Array<{ record: InventoryRecord; enabled: boolean }> = [];
@@ -70,6 +84,22 @@ describe('InventoryTable', () => {
 
 		expect(actions).toEqual([{ record: skill, enabled: false }]);
 		expect(screen.getByRole('button', { name: 'Disable docs' })).toBeInTheDocument();
+	});
+
+	it('offers the eligible Codex hook action without changing its trust state', async () => {
+		const actions: Array<{ record: InventoryRecord; enabled: boolean }> = [];
+		render(InventoryTable, {
+			props: {
+				records: [hookRecord],
+				onAction: (record: InventoryRecord, enabled: boolean) => actions.push({ record, enabled })
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Disable Stop hook' }));
+
+		expect(actions).toEqual([{ record: hookRecord, enabled: false }]);
+		expect(screen.getByText('Hook not trusted')).toBeInTheDocument();
+		expect(screen.getByText('Not effective')).toBeInTheDocument();
 	});
 
 	it('prevents a duplicate Codex skill action while its request is running', () => {
@@ -304,6 +334,25 @@ describe('InventoryActionDialog', () => {
 		expect(within(dialog).getByText('MCP server')).toBeInTheDocument();
 		expect(within(dialog).getByText('docs')).toBeInTheDocument();
 		expect(within(dialog).getByText(baseRecord.sourcePath)).toBeInTheDocument();
+	});
+
+	it('warns that enabling a Codex hook does not trust it', () => {
+		render(InventoryActionDialog, {
+			props: {
+				record: { ...hookRecord, enabled: false },
+				enabled: true,
+				submitting: false,
+				onConfirm: () => undefined,
+				onCancel: () => undefined
+			}
+		});
+
+		const dialog = screen.getByRole('dialog', { name: 'Enable Codex hook' });
+		expect(within(dialog).getByText('Hook')).toBeInTheDocument();
+		expect(within(dialog).getByText('Stop hook')).toBeInTheDocument();
+		expect(within(dialog).getByText(
+			'Enabling this hook does not trust it. Untrusted or changed hooks remain inactive until approved in Codex.'
+		)).toBeInTheDocument();
 	});
 
 	it('confirms the exact client, scope, project, state, and safe source location', () => {

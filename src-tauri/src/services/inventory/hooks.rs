@@ -177,20 +177,34 @@ fn push_hook_record(
         push_invalid_handler_warning(client, config_path, snapshot);
         return false;
     };
-    let (enabled, trust_state, approval_pending) =
-        codex_state.map_or((enabled, trust_state, false), |state| {
-            codex_effective_state(
-                state,
-                event,
-                group,
-                handler,
-                handler_type,
-                group_index,
-                handler_index,
-                enabled,
-                trust_state,
-            )
-        });
+    let hooks_feature_enabled = enabled;
+    let codex_evaluation = codex_state.map(|state| {
+        codex_effective_state(
+            state,
+            event,
+            group,
+            handler,
+            handler_type,
+            group_index,
+            handler_index,
+            trust_state,
+        )
+    });
+    let enabled = codex_evaluation
+        .as_ref()
+        .map_or(enabled, |evaluation| evaluation.enabled);
+    let trust_state = codex_evaluation
+        .as_ref()
+        .map_or(trust_state, |evaluation| evaluation.trust_state);
+    let approval_pending = codex_evaluation
+        .as_ref()
+        .is_some_and(|evaluation| evaluation.approval_pending);
+    let state_key = codex_evaluation
+        .as_ref()
+        .map(|evaluation| evaluation.state_key.clone());
+    let action_supported = codex_evaluation
+        .as_ref()
+        .is_none_or(|evaluation| evaluation.action_supported);
     let mut record = InventoryRecord::new(
         client,
         InventoryItemType::Hook,
@@ -205,8 +219,12 @@ fn push_hook_record(
     apply_path_metadata(&mut record, config_path);
     record.enabled = Some(enabled);
     record.trust_state = trust_state;
-    record.is_effective = effective_state(enabled, trust_state);
+    record.is_effective = effective_state(enabled && hooks_feature_enabled, trust_state);
     record.approval_pending = approval_pending;
+    record.codex_hook_state_key = state_key;
+    if !action_supported {
+        record.restrict_actions(ActionBlockedReason::UnsupportedByClient);
+    }
     record.detail = Some(format!("{handler_type} handler"));
     snapshot.records.push(record);
     true
@@ -258,22 +276,9 @@ pub fn push_toml_hooks(
     state_config: Option<&toml::Value>,
     snapshot: &mut InventorySnapshot,
 ) {
-    let Some(hooks) = config.get("hooks") else {
+    let Some(wrapper) = toml_hooks_wrapper(config, config_path, snapshot) else {
         return;
     };
-    let Ok(mut hooks_json) = serde_json::to_value(hooks) else {
-        snapshot.warnings.push(InventoryWarning::blocked(
-            ClientKind::Codex,
-            config_path.display().to_string(),
-            "Could not inspect inline hook definitions.",
-            ActionBlockedReason::MalformedSource,
-        ));
-        return;
-    };
-    if let Some(hooks) = hooks_json.as_object_mut() {
-        hooks.remove("state");
-    }
-    let wrapper = serde_json::json!({ "hooks": hooks_json });
     push_codex_json_hooks(
         &wrapper,
         config_path,
@@ -287,4 +292,25 @@ pub fn push_toml_hooks(
         &config_path.display().to_string(),
         snapshot,
     );
+}
+
+fn toml_hooks_wrapper(
+    config: &toml::Value,
+    config_path: &Path,
+    snapshot: &mut InventorySnapshot,
+) -> Option<Value> {
+    let hooks = config.get("hooks")?;
+    let Ok(mut hooks_json) = serde_json::to_value(hooks) else {
+        snapshot.warnings.push(InventoryWarning::blocked(
+            ClientKind::Codex,
+            config_path.display().to_string(),
+            "Could not inspect inline hook definitions.",
+            ActionBlockedReason::MalformedSource,
+        ));
+        return None;
+    };
+    if let Some(hooks) = hooks_json.as_object_mut() {
+        hooks.remove("state");
+    }
+    Some(serde_json::json!({ "hooks": hooks_json }))
 }

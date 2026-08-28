@@ -1,6 +1,8 @@
 use super::atomic_config::{
     restore_original, AtomicConfigWriter, ConfigSource, ConfigWriteError, ConfigWriter,
 };
+use super::codex::codex_action_revision_sources;
+use super::codex_hook_config::update_codex_hook_config;
 use super::codex_mcp_config::update_codex_mcp_config;
 use super::codex_skill_config::update_codex_skill_config;
 use super::models::{ClientKind, InventoryItemType, InventoryRecord};
@@ -67,27 +69,31 @@ fn set_inventory_record_enabled_with_writer(
         codex_home.clone(),
         project_roots.clone(),
     );
-    let record = resolve_record(&initial, &request.record_id)?;
-    validate_request(record, &request)?;
+    let record = resolve_record(&initial, &request.record_id)?.clone();
+    validate_request(&record, &request)?;
 
-    let config_path = match record.item_type {
-        InventoryItemType::Skill => codex_home.join("config.toml"),
-        InventoryItemType::Mcp => PathBuf::from(&record.source_path),
-        InventoryItemType::Hook => return Err(InventoryActionError::UnsupportedRecord),
-    };
-    let source = ConfigSource::read(&config_path)?;
-    let original = source.contents.as_deref().unwrap_or_default();
-    let updated = match record.item_type {
-        InventoryItemType::Skill => update_codex_skill_config(original, record, request.enabled)?,
-        InventoryItemType::Mcp => update_codex_mcp_config(original, &request, &record.name)?,
-        InventoryItemType::Hook => return Err(InventoryActionError::UnsupportedRecord),
+    let (config_path, source, updated) = match record.item_type {
+        InventoryItemType::Skill => {
+            prepare_config_update(codex_home.join("config.toml"), |original| {
+                update_codex_skill_config(original, &record, request.enabled)
+            })?
+        }
+        InventoryItemType::Mcp => {
+            prepare_config_update(PathBuf::from(&record.source_path), |original| {
+                update_codex_mcp_config(original, &request, &record.name)
+            })?
+        }
+        InventoryItemType::Hook => {
+            prepare_config_update(codex_home.join("config.toml"), |original| {
+                update_codex_hook_config(original, &record, request.enabled)
+            })?
+        }
     };
     let mut expected = initial.clone();
     expected.record_source_revision(&config_path, updated.as_bytes());
-    let (expected_revision, expected_restriction) = expected.composite_source_revision(&[
-        record.source_path.clone(),
-        config_path.display().to_string(),
-    ]);
+    let revision_sources = codex_action_revision_sources(&record, &config_path);
+    let (expected_revision, expected_restriction) =
+        expected.composite_source_revision(&revision_sources);
     if expected_restriction.is_some() {
         return Err(InventoryActionError::StaleInventory);
     }
@@ -99,6 +105,9 @@ fn set_inventory_record_enabled_with_writer(
     );
     let current_record = resolve_record(&current, &request.record_id)?;
     validate_request(current_record, &request)?;
+    if current_record.codex_hook_state_key != record.codex_hook_state_key {
+        return Err(InventoryActionError::StaleInventory);
+    }
 
     writer
         .replace(&source, updated.as_bytes())
@@ -125,6 +134,12 @@ fn set_inventory_record_enabled_with_writer(
         restore_original(&source, updated.as_bytes())?;
         return Err(InventoryActionError::VerificationFailed);
     }
+    if record.item_type == InventoryItemType::Hook
+        && verified_record.is_some_and(|verified| verified.trust_state != record.trust_state)
+    {
+        restore_original(&source, updated.as_bytes())?;
+        return Err(InventoryActionError::VerificationFailed);
+    }
     if verified_record.and_then(|record| record.action_capabilities.source_revision.as_deref())
         != Some(expected_revision.as_str())
     {
@@ -132,6 +147,15 @@ fn set_inventory_record_enabled_with_writer(
         return Err(InventoryActionError::StaleInventory);
     }
     Ok(verified)
+}
+
+fn prepare_config_update(
+    config_path: PathBuf,
+    update: impl FnOnce(&[u8]) -> Result<String, InventoryActionError>,
+) -> Result<(PathBuf, ConfigSource, String), InventoryActionError> {
+    let source = ConfigSource::read(&config_path)?;
+    let updated = update(source.contents.as_deref().unwrap_or_default())?;
+    Ok((config_path, source, updated))
 }
 
 fn resolve_record<'a>(
@@ -153,12 +177,7 @@ fn validate_request(
     record: &InventoryRecord,
     request: &InventoryActionRequest,
 ) -> Result<(), InventoryActionError> {
-    if record.client != ClientKind::Codex
-        || !matches!(
-            record.item_type,
-            InventoryItemType::Skill | InventoryItemType::Mcp
-        )
-    {
+    if record.client != ClientKind::Codex {
         return Err(InventoryActionError::UnsupportedRecord);
     }
     if !cfg!(target_os = "macos") {
@@ -203,6 +222,10 @@ mod tests {
         moved_dir: PathBuf,
     }
 
+    struct HookDefinitionMutatingWriter {
+        hooks_file: PathBuf,
+    }
+
     impl ConfigWriter for SkillMutatingWriter {
         fn replace(&self, source: &ConfigSource, updated: &[u8]) -> Result<(), ConfigWriteError> {
             AtomicConfigWriter.replace(source, updated)?;
@@ -221,6 +244,17 @@ mod tests {
             AtomicConfigWriter.replace(source, updated)?;
             fs::rename(&self.config_dir, &self.moved_dir).map_err(|_| ConfigWriteError::Io)?;
             symlink(&self.moved_dir, &self.config_dir).map_err(|_| ConfigWriteError::Io)
+        }
+    }
+
+    impl ConfigWriter for HookDefinitionMutatingWriter {
+        fn replace(&self, source: &ConfigSource, updated: &[u8]) -> Result<(), ConfigWriteError> {
+            AtomicConfigWriter.replace(source, updated)?;
+            fs::write(
+                &self.hooks_file,
+                r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"changed-during-read-back"}]}]}}"#,
+            )
+            .map_err(|_| ConfigWriteError::Io)
         }
     }
 
@@ -388,6 +422,48 @@ mod tests {
                 source_revision: record.action_capabilities.source_revision.clone().unwrap(),
             },
             &SkillMutatingWriter { skill_file },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, InventoryActionError::StaleInventory);
+        assert_eq!(fs::read(config_path).unwrap(), original);
+    }
+
+    #[test]
+    fn hook_definition_change_during_read_back_restores_the_original_config() {
+        let fixture = TempDir::new().unwrap();
+        let home = fixture.path().join("home");
+        let codex_home = home.join(".codex");
+        let config_path = codex_home.join("config.toml");
+        let hooks_file = codex_home.join("hooks.json");
+        fs::create_dir_all(&codex_home).unwrap();
+        fs::write(&config_path, "# original remains\n").unwrap();
+        fs::write(
+            &hooks_file,
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"original"}]}]}}"#,
+        )
+        .unwrap();
+        let original = fs::read(&config_path).unwrap();
+        let snapshot =
+            discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+        let record = snapshot
+            .records
+            .iter()
+            .find(|record| {
+                record.client == ClientKind::Codex && record.item_type == InventoryItemType::Hook
+            })
+            .expect("hook fixture should be discovered");
+
+        let error = set_inventory_record_enabled_with_writer(
+            home,
+            codex_home,
+            Vec::new(),
+            InventoryActionRequest {
+                record_id: record.id.clone(),
+                enabled: false,
+                source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+            },
+            &HookDefinitionMutatingWriter { hooks_file },
         )
         .unwrap_err();
 

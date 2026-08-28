@@ -54,6 +54,29 @@ const mcp: InventoryRecord = {
 
 const mcpSnapshot: InventorySnapshot = { ...snapshot, records: [mcp] };
 
+const hook: InventoryRecord = {
+	...skill,
+	id: 'codex:hook:user:stop:0',
+	itemType: 'hook',
+	name: 'Stop hook',
+	sourceKind: 'userConfig',
+	sourcePath: '/Users/test/.codex/hooks.json',
+	originalPath: '/Users/test/.codex/hooks.json',
+	resolvedPath: '/Users/test/.codex/hooks.json',
+	enabled: false,
+	trustState: 'untrusted',
+	isEffective: false,
+	protectedFields: ['Hook contents'],
+	detail: 'command handler',
+	actionCapabilities: {
+		...skill.actionCapabilities,
+		enable: { available: true, blockedReason: null },
+		disable: { available: false, blockedReason: 'alreadyDisabled' }
+	}
+};
+
+const hookSnapshot: InventorySnapshot = { ...snapshot, records: [hook] };
+
 describe('Inventory page actions', () => {
 	beforeEach(() => {
 		vi.mocked(invoke).mockReset();
@@ -149,6 +172,59 @@ describe('Inventory page actions', () => {
 		});
 		expect(await screen.findByText('Disabled')).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Enable docs' })).toBeInTheDocument();
+	});
+
+	it('keeps an enabled untrusted Codex hook visibly untrusted and ineffective', async () => {
+		const enabledHook: InventoryRecord = {
+			...hook,
+			enabled: true,
+			actionCapabilities: {
+				...hook.actionCapabilities,
+				enable: { available: false, blockedReason: 'alreadyEnabled' },
+				disable: { available: true, blockedReason: null },
+				sourceRevision: 'sha256:updated-hook-revision'
+			}
+		};
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === 'get_tool_inventory') return hookSnapshot;
+			if (command === 'set_inventory_record_enabled') {
+				return { ...hookSnapshot, records: [enabledHook] };
+			}
+			throw new Error(`Unexpected command: ${command}`);
+		});
+		render(InventoryPage);
+		await screen.findByText('Stop hook');
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Enable Stop hook' }));
+		await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Enable' }));
+
+		await waitFor(() => {
+			expect(invoke).toHaveBeenCalledWith('set_inventory_record_enabled', {
+				recordId: hook.id,
+				enabled: true,
+				sourceRevision: 'sha256:exact-revision'
+			});
+		});
+		expect(await screen.findByText('Not effective')).toBeInTheDocument();
+		expect(screen.getByText('Hook not trusted')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Disable Stop hook' })).toBeInTheDocument();
+	});
+
+	it('reports a hook-specific failure while keeping its prior state visible', async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === 'get_tool_inventory') return hookSnapshot;
+			throw 'The inventory changed after it was scanned. Scan again and retry.';
+		});
+		render(InventoryPage);
+		await screen.findByText('Stop hook');
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Enable Stop hook' }));
+		await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Enable' }));
+
+		const alert = await screen.findByRole('alert');
+		expect(within(alert).getByText('Hook state was not changed')).toBeInTheDocument();
+		expect(within(alert).getByText('The hook could not be updated. Scan again and retry.')).toBeInTheDocument();
+		expect(screen.getByText('Disabled')).toBeInTheDocument();
 	});
 
 	it('clears old action banners when a fresh scan succeeds', async () => {

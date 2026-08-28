@@ -4,7 +4,7 @@
 	import { i18n } from '$lib/stores';
 	import { inventoryClientLabels } from '$lib/inventory/actionLabels';
 	import type { TranslationKey } from '$lib/i18n';
-	import type { InventoryRecord, InventoryScope } from '$lib/types';
+	import type { InventoryItemType, InventoryRecord, InventoryScope } from '$lib/types';
 
 	type Props = {
 		record: InventoryRecord;
@@ -22,13 +22,19 @@
 		admin: 'inventory.scopeAdmin',
 		legacy: 'inventory.scopeLegacy'
 	};
+	const titleKeys: Record<InventoryItemType, { enable: TranslationKey; disable: TranslationKey }> = {
+		skill: { enable: 'inventory.enableSkillTitle', disable: 'inventory.disableSkillTitle' },
+		mcp: { enable: 'inventory.enableMcpTitle', disable: 'inventory.disableMcpTitle' },
+		hook: { enable: 'inventory.enableHookTitle', disable: 'inventory.disableHookTitle' }
+	};
+	const itemLabelKeys: Record<InventoryItemType, TranslationKey> = {
+		skill: 'inventory.confirmSkill',
+		mcp: 'inventory.confirmMcp',
+		hook: 'inventory.confirmHook'
+	};
 	const actionName = $derived(i18n.t(enabled ? 'common.enable' : 'common.disable'));
-	const title = $derived(i18n.t(
-		record.itemType === 'mcp'
-			? (enabled ? 'inventory.enableMcpTitle' : 'inventory.disableMcpTitle')
-			: (enabled ? 'inventory.enableSkillTitle' : 'inventory.disableSkillTitle')
-	));
-	const itemLabel = $derived(i18n.t(record.itemType === 'mcp' ? 'inventory.confirmMcp' : 'inventory.confirmSkill'));
+	const title = $derived(i18n.t(titleKeys[record.itemType][enabled ? 'enable' : 'disable']));
+	const itemLabel = $derived(i18n.t(itemLabelKeys[record.itemType]));
 	let dialogElement = $state<HTMLDivElement>();
 	let focusTarget = $state<HTMLDivElement>();
 	let previouslyFocused: HTMLElement | null = null;
@@ -115,6 +121,9 @@
 			<dd><code class="break-all text-xs text-gray-900 dark:text-white">{record.sourcePath}</code></dd>
 		</dl>
 
+		{#if record.itemType === 'hook' && enabled}
+			<p class="mt-4 text-sm text-amber-700 dark:text-amber-400">{i18n.t('inventory.hookTrustGuidance')}</p>
+		{/if}
 		<p class="mt-4 text-sm text-amber-700 dark:text-amber-400">{i18n.t('inventory.restartGuidance')}</p>
 
 		<div class="mt-6 flex justify-end gap-3">

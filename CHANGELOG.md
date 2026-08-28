@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Inventory Action Explanations**: Inventory records now report safe native enable and disable availability, confirmation and restart guidance, source revisions, and translated reasons when a source must remain read-only. (#12)
 - **Codex Skill Toggles**: On macOS, eligible Codex skills can now be safely enabled or disabled from inventory. Changes require confirmation, reject stale scans and linked configurations, preserve skill definitions and configuration metadata, retain displaced recovery files, use atomic writes, and verify the result with a fresh scan. (#13)
 - **Codex MCP Toggles**: On macOS, eligible user and project Codex MCP servers can now be safely enabled or disabled from inventory without deleting their definitions or exposing their protected connection settings. Changes target the confirmed source, reject stale scans and unsafe configurations, preserve unrelated settings, use the existing atomic rollback path, and verify the result with a fresh scan. (#14)
+- **Codex Hook Toggles**: On macOS, eligible non-managed Codex hooks can now be safely enabled or disabled from inventory without changing their trusted hash.
+  Untrusted or changed hooks remain visibly untrusted and ineffective until approved separately in Codex.
+  Changes target the exact event, matcher group, handler, scope, and source, reject stale scans and unsafe configurations, preserve protected hook contents, use the existing atomic rollback path, and verify the result with a fresh scan. (#15)
 
 ### Fixed
 - **Rust 1.98 Clippy Compatibility**: Updated backend shutdown iteration for the current zero-warning lint gate.

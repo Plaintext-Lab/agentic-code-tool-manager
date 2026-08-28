@@ -7,6 +7,7 @@
 	import InventoryActionDialog from '$lib/components/inventory/InventoryActionDialog.svelte';
 	import InventoryWarningList from '$lib/components/inventory/InventoryWarningList.svelte';
 	import { i18n } from '$lib/stores';
+	import type { TranslationKey } from '$lib/i18n';
 	import type { InventoryClient, InventoryItemType, InventoryRecord, InventorySnapshot } from '$lib/types';
 
 	type ClientFilter = 'all' | InventoryClient;
@@ -24,6 +25,11 @@
 	let search = $state('');
 	let clientFilter = $state<ClientFilter>('all');
 	let itemFilter = $state<ItemFilter>('all');
+	const actionErrorKeys: Record<InventoryItemType, { title: TranslationKey; fallback: TranslationKey }> = {
+		skill: { title: 'inventory.actionErrorTitle', fallback: 'inventory.actionErrorFallback' },
+		mcp: { title: 'inventory.mcpActionErrorTitle', fallback: 'inventory.mcpActionErrorFallback' },
+		hook: { title: 'inventory.hookActionErrorTitle', fallback: 'inventory.hookActionErrorFallback' }
+	};
 
 	const filteredRecords = $derived.by(() => {
 		const query = search.trim().toLowerCase();
@@ -72,9 +78,7 @@
 		const sourceRevision = actionRecord.actionCapabilities.sourceRevision;
 		if (!sourceRevision) {
 			actionErrorItemType = actionRecord.itemType;
-			actionError = i18n.t(actionRecord.itemType === 'mcp'
-				? 'inventory.mcpActionErrorFallback'
-				: 'inventory.actionErrorFallback');
+			actionError = i18n.t(actionErrorKeys[actionRecord.itemType].fallback);
 			actionRecord = null;
 			return;
 		}
@@ -96,9 +100,7 @@
 		} catch (caught) {
 			console.error('[Inventory] State update failed:', caught);
 			actionErrorItemType = changedRecord.itemType;
-			actionError = i18n.t(changedRecord.itemType === 'mcp'
-				? 'inventory.mcpActionErrorFallback'
-				: 'inventory.actionErrorFallback');
+			actionError = i18n.t(actionErrorKeys[changedRecord.itemType].fallback);
 			actionRecord = null;
 		} finally {
 			actionLoading = false;
@@ -135,9 +137,7 @@
 		{:else if snapshot}
 			{#if actionError}
 				<div class="card border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20" role="alert">
-					<h2 class="font-semibold text-red-800 dark:text-red-300">{i18n.t(actionErrorItemType === 'mcp'
-						? 'inventory.mcpActionErrorTitle'
-						: 'inventory.actionErrorTitle')}</h2>
+					<h2 class="font-semibold text-red-800 dark:text-red-300">{i18n.t(actionErrorKeys[actionErrorItemType ?? 'skill'].title)}</h2>
 					<p class="mt-1 text-sm text-red-700 dark:text-red-400">{actionError}</p>
 					<button class="btn btn-secondary mt-3" onclick={loadInventory}>{i18n.t('inventory.scanAgain')}</button>
 				</div>

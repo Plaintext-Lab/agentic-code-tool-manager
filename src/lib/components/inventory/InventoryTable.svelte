@@ -81,7 +81,7 @@
 	}
 
 	function desiredState(record: InventoryRecord): boolean | null {
-		if (record.client !== 'codex' || !['skill', 'mcp'].includes(record.itemType)) return null;
+		if (record.client !== 'codex' || !['skill', 'mcp', 'hook'].includes(record.itemType)) return null;
 		if (record.actionCapabilities.enable.available) return true;
 		if (record.actionCapabilities.disable.available) return false;
 		return null;

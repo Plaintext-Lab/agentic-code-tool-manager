@@ -243,6 +243,8 @@ pub struct InventoryRecord {
     pub(crate) action_restriction: Option<ActionBlockedReason>,
     #[serde(skip)]
     pub(crate) approval_pending: bool,
+    #[serde(skip)]
+    pub(crate) codex_hook_state_key: Option<String>,
 }
 
 impl InventoryRecord {
@@ -293,6 +295,7 @@ impl InventoryRecord {
             ),
             action_restriction: None,
             approval_pending: false,
+            codex_hook_state_key: None,
         }
     }
 

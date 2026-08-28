@@ -1,3 +1,4 @@
+use super::codex_hook_config::codex_hook_state_is_editable;
 use super::codex_skill_config::codex_skill_config_match_count;
 use super::config::{push_toml_mcps, read_json, read_toml};
 use super::hooks::{push_codex_json_hooks, push_toml_hooks};
@@ -135,6 +136,28 @@ impl ClientAdapter for CodexAdapter {
                 record.restrict_actions(ActionBlockedReason::MalformedSource);
             }
         }
+        let hook_state_config_is_editable =
+            codex_config_path_is_editable(&global_config_path, &context.home_dir);
+        for record in snapshot.records.iter_mut().filter(|record| {
+            record.client == ClientKind::Codex
+                && record.item_type == super::models::InventoryItemType::Hook
+        }) {
+            let boundary = record
+                .project_path
+                .as_deref()
+                .map(Path::new)
+                .unwrap_or(&context.home_dir);
+            let state_is_editable = record
+                .codex_hook_state_key
+                .as_deref()
+                .is_some_and(|key| codex_hook_state_is_editable(global_config.as_ref(), key));
+            if !hook_state_config_is_editable
+                || !codex_config_path_is_editable(Path::new(&record.source_path), boundary)
+                || !state_is_editable
+            {
+                record.restrict_actions(ActionBlockedReason::MalformedSource);
+            }
+        }
     }
 
     fn action_capabilities(
@@ -145,11 +168,7 @@ impl ClientAdapter for CodexAdapter {
         if let Some(reason) = source_action_blocker(record) {
             return InventoryActionCapabilities::blocked(reason, Some(source_revision));
         }
-        if matches!(
-            record.item_type,
-            super::models::InventoryItemType::Skill | super::models::InventoryItemType::Mcp
-        ) && !cfg!(target_os = "macos")
-        {
+        if !cfg!(target_os = "macos") {
             return InventoryActionCapabilities::blocked(
                 ActionBlockedReason::UnsupportedByClient,
                 Some(source_revision),
@@ -163,14 +182,6 @@ impl ClientAdapter for CodexAdapter {
                 | SourceKind::ProjectSkills
                 | SourceKind::LegacySkills
         ) {
-            if record.item_type == super::models::InventoryItemType::Hook && record.approval_pending
-            {
-                return InventoryActionCapabilities::pending_approval(
-                    true,
-                    super::models::ReloadGuidance::RestartClient,
-                    source_revision,
-                );
-            }
             return InventoryActionCapabilities::stateful(
                 record.enabled,
                 true,
@@ -189,28 +200,36 @@ impl ClientAdapter for CodexAdapter {
         context: &DiscoveryContext,
         record: &InventoryRecord,
     ) -> Vec<String> {
-        let mut sources = vec![record.source_path.clone()];
+        let sources = vec![record.source_path.clone()];
         if source_action_blocker(record).is_some() {
             return sources;
         }
-        let global_config = context.codex_home.join("config.toml").display().to_string();
-        match record.item_type {
-            super::models::InventoryItemType::Skill => sources.push(global_config),
-            super::models::InventoryItemType::Hook => {
-                sources.push(global_config);
-                if let Some(project_path) = record.project_path.as_ref() {
-                    sources.push(
-                        Path::new(project_path)
-                            .join(".codex/config.toml")
-                            .display()
-                            .to_string(),
-                    );
-                }
-            }
-            super::models::InventoryItemType::Mcp => {}
-        }
-        sources
+        codex_action_revision_sources(record, &context.codex_home.join("config.toml"))
     }
+}
+
+pub(super) fn codex_action_revision_sources(
+    record: &InventoryRecord,
+    config_path: &Path,
+) -> Vec<String> {
+    let mut sources = vec![record.source_path.clone()];
+    if matches!(
+        record.item_type,
+        super::models::InventoryItemType::Skill | super::models::InventoryItemType::Hook
+    ) {
+        sources.push(config_path.display().to_string());
+    }
+    if record.item_type == super::models::InventoryItemType::Hook {
+        if let Some(project_path) = record.project_path.as_ref() {
+            sources.push(
+                Path::new(project_path)
+                    .join(".codex/config.toml")
+                    .display()
+                    .to_string(),
+            );
+        }
+    }
+    sources
 }
 
 fn codex_config_path_is_editable(config_path: &Path, boundary: &Path) -> bool {
