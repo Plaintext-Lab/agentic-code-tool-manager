@@ -78,7 +78,7 @@ impl ClientAdapter for CodexAdapter {
             snapshot,
         );
         let skill_config_is_editable = codex_skill_config_is_editable(global_config.as_ref())
-            && codex_config_path_is_editable(&global_config_path);
+            && codex_config_path_is_editable(&global_config_path, &context.home_dir);
         let codex_skill_sources: Vec<(PathBuf, Option<PathBuf>, Option<PathBuf>)> = snapshot
             .records
             .iter()
@@ -126,7 +126,12 @@ impl ClientAdapter for CodexAdapter {
             record.client == ClientKind::Codex
                 && record.item_type == super::models::InventoryItemType::Mcp
         }) {
-            if !codex_config_path_is_editable(Path::new(&record.source_path)) {
+            let boundary = record
+                .project_path
+                .as_deref()
+                .map(Path::new)
+                .unwrap_or(&context.home_dir);
+            if !codex_config_path_is_editable(Path::new(&record.source_path), boundary) {
                 record.restrict_actions(ActionBlockedReason::MalformedSource);
             }
         }
@@ -208,27 +213,40 @@ impl ClientAdapter for CodexAdapter {
     }
 }
 
-fn codex_config_path_is_editable(config_path: &Path) -> bool {
+fn codex_config_path_is_editable(config_path: &Path, boundary: &Path) -> bool {
     #[cfg(target_os = "macos")]
     {
         use std::os::unix::fs::MetadataExt;
 
-        let config_is_editable = match std::fs::symlink_metadata(config_path) {
-            Ok(metadata) => metadata.is_file() && metadata.nlink() == 1,
-            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        let Some(shared_ancestor) = config_path
+            .ancestors()
+            .find(|ancestor| boundary.starts_with(ancestor))
+        else {
+            return false;
         };
-        let parent_is_editable =
-            config_path
-                .parent()
-                .is_some_and(|parent| match std::fs::symlink_metadata(parent) {
-                    Ok(metadata) => metadata.is_dir() && !metadata.file_type().is_symlink(),
-                    Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-                });
-        config_is_editable && parent_is_editable
+        for (index, path) in config_path.ancestors().enumerate() {
+            match std::fs::symlink_metadata(path) {
+                Ok(metadata) if index == 0 && (!metadata.is_file() || metadata.nlink() != 1) => {
+                    return false;
+                }
+                Ok(metadata)
+                    if index > 0 && (!metadata.is_dir() || metadata.file_type().is_symlink()) =>
+                {
+                    return false;
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return false,
+            }
+            if path == shared_ancestor {
+                return true;
+            }
+        }
+        false
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = config_path;
+        let _ = (config_path, boundary);
         true
     }
 }

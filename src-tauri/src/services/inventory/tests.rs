@@ -1749,6 +1749,38 @@ fn codex_mcp_config_inside_a_symlinked_codex_home_is_read_only() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn codex_mcp_config_below_a_symlinked_ancestor_is_read_only() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let linked_area_target = fixture.path().join("linked-area-target");
+    let linked_area = home.join("linked-area");
+    let codex_home = linked_area.join("codex");
+    let config_path = linked_area_target.join("codex/config.toml");
+    write(
+        &config_path,
+        "[mcp_servers.linked_ancestor]\ncommand = 'linked-ancestor-server'\nenabled = true\n",
+    );
+    fs::create_dir_all(&home).unwrap();
+    symlink(&linked_area_target, &linked_area).unwrap();
+    let original = fs::read(&config_path).unwrap();
+
+    let snapshot = discover_inventory_with_codex_home(home, codex_home, Vec::new());
+    let record = codex_mcp(&snapshot, "linked_ancestor", None);
+
+    assert!(record.is_symlink);
+    assert!(!record.action_capabilities.enable.available);
+    assert!(!record.action_capabilities.disable.available);
+    assert_eq!(
+        record.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+    assert_eq!(fs::read(config_path).unwrap(), original);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn codex_mcp_action_rejects_a_stale_source_without_writing() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");
