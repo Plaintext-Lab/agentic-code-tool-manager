@@ -196,8 +196,11 @@ export const en = {
 	'inventory.disabling': 'Disabling…',
 	'inventory.enableSkillTitle': 'Enable Codex skill',
 	'inventory.disableSkillTitle': 'Disable Codex skill',
+	'inventory.enableMcpTitle': 'Enable Codex MCP server',
+	'inventory.disableMcpTitle': 'Disable Codex MCP server',
 	'inventory.actionConfirmDescription': 'Confirm the exact native Codex setting that will change.',
 	'inventory.confirmSkill': 'Skill',
+	'inventory.confirmMcp': 'MCP server',
 	'inventory.confirmClient': 'Client',
 	'inventory.confirmScope': 'Scope',
 	'inventory.confirmProject': 'Project',
@@ -207,6 +210,8 @@ export const en = {
 	'inventory.restartGuidance': 'Restart Codex after this change so the new state takes effect.',
 	'inventory.actionErrorTitle': 'Skill state was not changed',
 	'inventory.actionErrorFallback': 'The skill could not be updated. Scan again and retry.',
+	'inventory.mcpActionErrorTitle': 'MCP server state was not changed',
+	'inventory.mcpActionErrorFallback': 'The MCP server could not be updated. Scan again and retry.',
 	'inventory.actionSuccess': '{name} is now {state}. Restart Codex to apply the change.',
 
 	// ── Dashboard ────────────────────────────────────────

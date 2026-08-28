@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cross-Client Inventory**: Added a read-only inventory of skills, MCP servers, and hooks discovered from Claude, Codex, and Cursor user, registered-project, and enabled Codex plugin locations. The inventory shows provenance, disabled and trusted state, symlink targets, and safe source warnings without displaying MCP commands, headers, environment values, or hook contents. (#2)
 - **Inventory Action Explanations**: Inventory records now report safe native enable and disable availability, confirmation and restart guidance, source revisions, and translated reasons when a source must remain read-only. (#12)
 - **Codex Skill Toggles**: On macOS, eligible Codex skills can now be safely enabled or disabled from inventory. Changes require confirmation, reject stale scans and linked configurations, preserve skill definitions and configuration metadata, retain displaced recovery files, use atomic writes, and verify the result with a fresh scan. (#13)
+- **Codex MCP Toggles**: On macOS, eligible user and project Codex MCP servers can now be safely enabled or disabled from inventory without deleting their definitions or exposing their protected connection settings. Changes target the confirmed source, reject stale scans and unsafe configurations, preserve unrelated settings, use the existing atomic rollback path, and verify the result with a fresh scan. (#14)
 
 ### Fixed
 - **Rust 1.98 Clippy Compatibility**: Updated backend shutdown iteration for the current zero-warning lint gate.

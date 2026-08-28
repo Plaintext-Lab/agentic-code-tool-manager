@@ -78,7 +78,7 @@ impl ClientAdapter for CodexAdapter {
             snapshot,
         );
         let skill_config_is_editable = codex_skill_config_is_editable(global_config.as_ref())
-            && codex_skill_config_path_is_editable(&global_config_path);
+            && codex_config_path_is_editable(&global_config_path);
         let codex_skill_sources: Vec<(PathBuf, Option<PathBuf>, Option<PathBuf>)> = snapshot
             .records
             .iter()
@@ -122,6 +122,14 @@ impl ClientAdapter for CodexAdapter {
                 record.restrict_actions(ActionBlockedReason::MalformedSource);
             }
         }
+        for record in snapshot.records.iter_mut().filter(|record| {
+            record.client == ClientKind::Codex
+                && record.item_type == super::models::InventoryItemType::Mcp
+        }) {
+            if !codex_config_path_is_editable(Path::new(&record.source_path)) {
+                record.restrict_actions(ActionBlockedReason::MalformedSource);
+            }
+        }
     }
 
     fn action_capabilities(
@@ -132,7 +140,10 @@ impl ClientAdapter for CodexAdapter {
         if let Some(reason) = source_action_blocker(record) {
             return InventoryActionCapabilities::blocked(reason, Some(source_revision));
         }
-        if record.item_type == super::models::InventoryItemType::Skill && !cfg!(target_os = "macos")
+        if matches!(
+            record.item_type,
+            super::models::InventoryItemType::Skill | super::models::InventoryItemType::Mcp
+        ) && !cfg!(target_os = "macos")
         {
             return InventoryActionCapabilities::blocked(
                 ActionBlockedReason::UnsupportedByClient,
@@ -197,7 +208,7 @@ impl ClientAdapter for CodexAdapter {
     }
 }
 
-fn codex_skill_config_path_is_editable(config_path: &Path) -> bool {
+fn codex_config_path_is_editable(config_path: &Path) -> bool {
     #[cfg(target_os = "macos")]
     {
         use std::os::unix::fs::MetadataExt;

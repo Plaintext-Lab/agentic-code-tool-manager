@@ -34,6 +34,20 @@ const baseRecord: InventoryRecord = {
 };
 
 describe('InventoryTable', () => {
+	it('offers the eligible Codex MCP action and passes only the discovered record', async () => {
+		const actions: Array<{ record: InventoryRecord; enabled: boolean }> = [];
+		render(InventoryTable, {
+			props: {
+				records: [baseRecord],
+				onAction: (record: InventoryRecord, enabled: boolean) => actions.push({ record, enabled })
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Disable docs' }));
+
+		expect(actions).toEqual([{ record: baseRecord, enabled: false }]);
+	});
+
 	it('offers the eligible Codex skill action and passes only the discovered record', async () => {
 		const actions: Array<{ record: InventoryRecord; enabled: boolean }> = [];
 		const skill = {
@@ -55,7 +69,7 @@ describe('InventoryTable', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Disable toggle-me' }));
 
 		expect(actions).toEqual([{ record: skill, enabled: false }]);
-		expect(screen.queryByRole('button', { name: 'Disable docs' })).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Disable docs' })).toBeInTheDocument();
 	});
 
 	it('prevents a duplicate Codex skill action while its request is running', () => {
@@ -275,6 +289,23 @@ describe('InventoryTable', () => {
 });
 
 describe('InventoryActionDialog', () => {
+	it('labels a Codex MCP confirmation with its exact scope and source', () => {
+		render(InventoryActionDialog, {
+			props: {
+				record: baseRecord,
+				enabled: false,
+				submitting: false,
+				onConfirm: () => undefined,
+				onCancel: () => undefined
+			}
+		});
+
+		const dialog = screen.getByRole('dialog', { name: 'Disable Codex MCP server' });
+		expect(within(dialog).getByText('MCP server')).toBeInTheDocument();
+		expect(within(dialog).getByText('docs')).toBeInTheDocument();
+		expect(within(dialog).getByText(baseRecord.sourcePath)).toBeInTheDocument();
+	});
+
 	it('confirms the exact client, scope, project, state, and safe source location', () => {
 		const projectSkill: InventoryRecord = {
 			...baseRecord,
