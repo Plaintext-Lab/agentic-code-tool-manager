@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use super::actions::{
     set_inventory_record_enabled_with_paths, InventoryActionError, InventoryActionRequest,
 };
@@ -295,6 +296,26 @@ fn codex_boundary_blocks_administrator_and_broken_link_sources() {
     assert_eq!(
         administrator_actions.disable.blocked_reason,
         Some(ActionBlockedReason::AdministratorSource)
+    );
+
+    let mut managed_hook = InventoryRecord::new(
+        ClientKind::Codex,
+        InventoryItemType::Hook,
+        "managed-hook".to_string(),
+        InventoryScope::Admin,
+        SourceKind::ManagedConfig,
+        "/Library/Application Support/Codex/managed-hooks.toml".to_string(),
+        None,
+        0,
+        300,
+    );
+    managed_hook.enabled = Some(true);
+    managed_hook.is_effective = Some(true);
+    let managed_actions =
+        CodexAdapter.action_capabilities(&managed_hook, "sha256:managed-hook".to_string());
+    assert_eq!(
+        managed_actions.disable.blocked_reason,
+        Some(ActionBlockedReason::ManagedSource)
     );
 
     let mut broken_link = InventoryRecord::new(
@@ -819,8 +840,11 @@ trusted_hash = "sha256:620fb822b32c78c73a2c5817199b662d4e82c221d93dd1b85bf843cf8
     assert_eq!(hooks[0].is_effective, Some(true));
     assert_eq!(hooks[1].trust_state, TrustState::Untrusted);
     assert_eq!(hooks[1].is_effective, Some(false));
-    assert!(hooks[1].action_capabilities.enable.available);
-    assert!(hooks[1].action_capabilities.disable.available);
+    assert!(!hooks[1].action_capabilities.enable.available);
+    assert_eq!(
+        hooks[1].action_capabilities.disable.available,
+        cfg!(target_os = "macos")
+    );
 }
 
 #[test]
@@ -885,6 +909,21 @@ enabled = true
         .expect("plugin MCP should be discovered");
     assert_eq!(
         plugin_mcp.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::PluginOwnedSource)
+    );
+    let plugin_hook = snapshot
+        .records
+        .iter()
+        .find(|record| {
+            record.client == ClientKind::Codex
+                && record.item_type == InventoryItemType::Hook
+                && record.source_kind == SourceKind::PluginConfig
+        })
+        .expect("plugin hook should be discovered");
+    assert!(!plugin_hook.action_capabilities.enable.available);
+    assert!(!plugin_hook.action_capabilities.disable.available);
+    assert_eq!(
+        plugin_hook.action_capabilities.disable.blocked_reason,
         Some(ActionBlockedReason::PluginOwnedSource)
     );
 }
@@ -1237,7 +1276,7 @@ fn codex_inline_hooks_use_effective_feature_state() {
         .collect();
 
     assert_eq!(hooks.len(), 2);
-    assert!(hooks.iter().all(|record| record.enabled == Some(false)));
+    assert!(hooks.iter().all(|record| record.enabled == Some(true)));
     assert!(hooks
         .iter()
         .all(|record| record.is_effective == Some(false)));
@@ -2303,23 +2342,253 @@ fn codex_skill_action_marks_a_hard_linked_config_read_only() {
     assert_eq!(fs::read(managed_copy).unwrap(), b"# managed config\n");
 }
 
+#[cfg(target_os = "macos")]
 #[test]
-fn inventory_action_rejects_unsupported_codex_hooks_without_exposing_config() {
+fn codex_hook_action_disables_and_enables_without_changing_trust() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    let hooks_path = codex_home.join("hooks.json");
+    write(
+        &hooks_path,
+        r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"echo trusted"}]}]}}"#,
+    );
+    write(
+        &config_path,
+        &format!(
+            r#"# preserve this comment
+secret_value = "DO_NOT_EXPOSE"
+
+[hooks.state."{}:pre_tool_use:0:0"]
+enabled = true
+trusted_hash = "sha256:620fb822b32c78c73a2c5817199b662d4e82c221d93dd1b85bf843cf8fec7785"
+unknown_setting = "keep-me"
+"#,
+            hooks_path.display()
+        ),
+    );
+    let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+    let record = codex_hook(&initial, "PreToolUse hook", None, 0);
+
+    assert_eq!(record.enabled, Some(true));
+    assert_eq!(record.trust_state, TrustState::Trusted);
+    assert!(record.action_capabilities.disable.available);
+
+    let disabled = set_inventory_record_enabled_with_paths(
+        home.clone(),
+        codex_home.clone(),
+        Vec::new(),
+        InventoryActionRequest {
+            record_id: record.id.clone(),
+            enabled: false,
+            source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap();
+
+    let disabled_record = codex_hook(&disabled, "PreToolUse hook", None, 0);
+    assert_eq!(disabled_record.enabled, Some(false));
+    assert_eq!(disabled_record.trust_state, TrustState::Trusted);
+    assert_eq!(disabled_record.is_effective, Some(false));
+    assert!(disabled_record.action_capabilities.enable.available);
+
+    let enabled = set_inventory_record_enabled_with_paths(
+        home,
+        codex_home,
+        Vec::new(),
+        InventoryActionRequest {
+            record_id: disabled_record.id.clone(),
+            enabled: true,
+            source_revision: disabled_record
+                .action_capabilities
+                .source_revision
+                .clone()
+                .unwrap(),
+        },
+    )
+    .unwrap();
+
+    let enabled_record = codex_hook(&enabled, "PreToolUse hook", None, 0);
+    assert_eq!(enabled_record.enabled, Some(true));
+    assert_eq!(enabled_record.trust_state, TrustState::Trusted);
+    assert_eq!(enabled_record.is_effective, Some(true));
+    let rendered = fs::read_to_string(config_path).unwrap();
+    assert!(rendered.contains("# preserve this comment"));
+    assert!(rendered.contains("DO_NOT_EXPOSE"));
+    assert!(rendered.contains("unknown_setting = \"keep-me\""));
+    assert!(rendered.contains(
+        "trusted_hash = \"sha256:620fb822b32c78c73a2c5817199b662d4e82c221d93dd1b85bf843cf8fec7785\""
+    ));
+    let serialized = serde_json::to_string(&enabled).unwrap();
+    assert!(!serialized.contains("DO_NOT_EXPOSE"));
+    assert!(!serialized.contains("echo trusted"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn unsupported_codex_hook_types_are_read_only() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");
     let codex_home = home.join(".codex");
     write(
-        &codex_home.join("config.toml"),
-        "secret_value = 'DO_NOT_EXPOSE'\n[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = 'command'\ncommand = 'safe'\n",
+        &codex_home.join("hooks.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"prompt","prompt":"DO_NOT_EXPOSE"}]}]}}"#,
+    );
+
+    let snapshot = discover_inventory_with_codex_home(home, codex_home, Vec::new());
+    let record = codex_hook(&snapshot, "Stop hook", None, 0);
+
+    assert!(!record.action_capabilities.enable.available);
+    assert!(!record.action_capabilities.disable.available);
+    assert_eq!(
+        record.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::UnsupportedByClient)
+    );
+    assert!(!serde_json::to_string(&snapshot)
+        .unwrap()
+        .contains("DO_NOT_EXPOSE"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn unsupported_codex_hook_event_handler_combinations_are_read_only() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    write(
+        &codex_home.join("hooks.json"),
+        r#"{"hooks":{"SessionEnd":[{"hooks":[{"type":"mcp_tool","server":"secret-server","tool":"secret-tool"}]}],"FutureEvent":[{"hooks":[{"type":"command","command":"DO_NOT_EXPOSE"}]}]}}"#,
+    );
+
+    let snapshot = discover_inventory_with_codex_home(home, codex_home, Vec::new());
+    for name in ["SessionEnd hook", "FutureEvent hook"] {
+        let record = codex_hook(&snapshot, name, None, 0);
+        assert!(!record.action_capabilities.enable.available);
+        assert!(!record.action_capabilities.disable.available);
+        assert_eq!(
+            record.action_capabilities.enable.blocked_reason,
+            Some(ActionBlockedReason::UnsupportedByClient)
+        );
+    }
+    let serialized = serde_json::to_string(&snapshot).unwrap();
+    assert!(!serialized.contains("secret-server"));
+    assert!(!serialized.contains("secret-tool"));
+    assert!(!serialized.contains("DO_NOT_EXPOSE"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_hook_action_enables_a_changed_hook_without_trusting_it() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    let hooks_path = codex_home.join("hooks.json");
+    write(
+        &hooks_path,
+        r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"echo changed"}]}]}}"#,
+    );
+    let trusted_hash = "sha256:620fb822b32c78c73a2c5817199b662d4e82c221d93dd1b85bf843cf8fec7785";
+    write(
+        &config_path,
+        &format!(
+            "[hooks.state.\"{}:pre_tool_use:0:0\"]\nenabled = false\ntrusted_hash = \"{trusted_hash}\"\n",
+            hooks_path.display()
+        ),
     );
     let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
-    let record = initial
-        .records
-        .iter()
-        .find(|record| {
-            record.client == ClientKind::Codex && record.item_type == InventoryItemType::Hook
-        })
-        .unwrap();
+    let record = codex_hook(&initial, "PreToolUse hook", None, 0);
+    assert_eq!(record.enabled, Some(false));
+    assert_eq!(record.trust_state, TrustState::Untrusted);
+    assert!(record.action_capabilities.enable.available);
+
+    let updated = set_inventory_record_enabled_with_paths(
+        home,
+        codex_home,
+        Vec::new(),
+        InventoryActionRequest {
+            record_id: record.id.clone(),
+            enabled: true,
+            source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap();
+
+    let updated_record = codex_hook(&updated, "PreToolUse hook", None, 0);
+    assert_eq!(updated_record.enabled, Some(true));
+    assert_eq!(updated_record.trust_state, TrustState::Untrusted);
+    assert_eq!(updated_record.is_effective, Some(false));
+    let rendered = fs::read_to_string(config_path).unwrap();
+    assert!(rendered.contains(&format!("trusted_hash = \"{trusted_hash}\"")));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_hook_action_targets_one_duplicate_handler_by_exact_position() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    let hooks_path = codex_home.join("hooks.json");
+    write(
+        &hooks_path,
+        r#"{"hooks":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"same-secret"},{"type":"command","command":"same-secret"}]}]}}"#,
+    );
+    let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+    let target = codex_hook(&initial, "Stop hook", None, 1);
+
+    let updated = set_inventory_record_enabled_with_paths(
+        home,
+        codex_home,
+        Vec::new(),
+        InventoryActionRequest {
+            record_id: target.id.clone(),
+            enabled: false,
+            source_revision: target.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        codex_hook(&updated, "Stop hook", None, 0).enabled,
+        Some(true)
+    );
+    assert_eq!(
+        codex_hook(&updated, "Stop hook", None, 1).enabled,
+        Some(false)
+    );
+    let parsed: toml::Value = toml::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
+    let states = parsed["hooks"]["state"].as_table().unwrap();
+    assert!(states
+        .get(&format!("{}:stop:0:0", hooks_path.display()))
+        .is_none());
+    assert_eq!(
+        states[&format!("{}:stop:0:1", hooks_path.display())]["enabled"].as_bool(),
+        Some(false)
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_hook_action_rejects_a_changed_handler_as_stale() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    let hooks_path = codex_home.join("hooks.json");
+    write(
+        &hooks_path,
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"before"}]}]}}"#,
+    );
+    write(&config_path, "# original remains\n");
+    let original = fs::read(&config_path).unwrap();
+    let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+    let record = codex_hook(&initial, "Stop hook", None, 0);
+    write(
+        &hooks_path,
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"after"}]}]}}"#,
+    );
 
     let error = set_inventory_record_enabled_with_paths(
         home,
@@ -2333,8 +2602,132 @@ fn inventory_action_rejects_unsupported_codex_hooks_without_exposing_config() {
     )
     .unwrap_err();
 
-    assert_eq!(error, InventoryActionError::UnsupportedRecord);
+    assert_eq!(error, InventoryActionError::StaleInventory);
+    assert_eq!(fs::read(config_path).unwrap(), original);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_project_hook_action_writes_user_state_without_changing_the_hook_source() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let project = fixture.path().join("project");
+    let config_path = codex_home.join("config.toml");
+    let hooks_path = project.join(".codex/hooks.json");
+    write(
+        &config_path,
+        &format!(
+            "[projects.{:?}]\ntrust_level = \"trusted\"\n",
+            project.display().to_string()
+        ),
+    );
+    write(
+        &hooks_path,
+        r#"{"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":"project-secret"}]}]}}"#,
+    );
+    let original_hooks = fs::read(&hooks_path).unwrap();
+    let projects = vec![project.clone()];
+    let initial =
+        discover_inventory_with_codex_home(home.clone(), codex_home.clone(), projects.clone());
+    let record = codex_hook(&initial, "SessionEnd hook", Some(&project), 0);
+
+    let updated = set_inventory_record_enabled_with_paths(
+        home,
+        codex_home,
+        projects,
+        InventoryActionRequest {
+            record_id: record.id.clone(),
+            enabled: false,
+            source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        codex_hook(&updated, "SessionEnd hook", Some(&project), 0).enabled,
+        Some(false)
+    );
+    assert_eq!(fs::read(&hooks_path).unwrap(), original_hooks);
+    let rendered = fs::read_to_string(config_path).unwrap();
+    assert!(rendered.contains(&format!("{}:session_end:0:0", hooks_path.display())));
+    assert!(rendered.contains("enabled = false"));
+    assert!(!serde_json::to_string(&updated)
+        .unwrap()
+        .contains("project-secret"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn malformed_codex_hook_state_is_read_only_without_exposing_secrets() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    let hooks_path = codex_home.join("hooks.json");
+    write(
+        &hooks_path,
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"DO_NOT_EXPOSE"}]}]}}"#,
+    );
+    write(
+        &config_path,
+        &format!(
+            "[hooks.state.\"{}:stop:0:0\"]\nenabled = \"SECRET_INVALID_STATE\"\n",
+            hooks_path.display()
+        ),
+    );
+    let original = fs::read(&config_path).unwrap();
+    let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+    let record = codex_hook(&initial, "Stop hook", None, 0);
+    assert!(!record.action_capabilities.enable.available);
+    assert!(!record.action_capabilities.disable.available);
+    assert_eq!(
+        record.action_capabilities.enable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+
+    let error = set_inventory_record_enabled_with_paths(
+        home,
+        codex_home,
+        Vec::new(),
+        InventoryActionRequest {
+            record_id: record.id.clone(),
+            enabled: false,
+            source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error, InventoryActionError::ActionUnavailable);
     assert!(!error.to_string().contains("DO_NOT_EXPOSE"));
+    assert!(!error.to_string().contains("SECRET_INVALID_STATE"));
+    assert_eq!(fs::read(config_path).unwrap(), original);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn malformed_codex_hooks_container_is_read_only_without_exposing_secrets() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    write(
+        &codex_home.join("hooks.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"DO_NOT_EXPOSE"}]}]}}"#,
+    );
+    write(&config_path, "hooks = \"SECRET_INVALID_HOOKS_CONTAINER\"\n");
+
+    let snapshot = discover_inventory_with_codex_home(home, codex_home, Vec::new());
+    let record = codex_hook(&snapshot, "Stop hook", None, 0);
+    assert!(!record.action_capabilities.enable.available);
+    assert!(!record.action_capabilities.disable.available);
+    assert_eq!(
+        record.action_capabilities.enable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+    let serialized = serde_json::to_string(&snapshot).unwrap();
+    assert!(!serialized.contains("DO_NOT_EXPOSE"));
+    assert!(!serialized.contains("SECRET_INVALID_HOOKS_CONTAINER"));
 }
 
 #[cfg(target_os = "macos")]
@@ -2563,6 +2956,32 @@ fn codex_skill<'a>(
                 && record.project_path.as_deref() == project_path.as_deref()
         })
         .expect("Codex skill fixture should be discovered")
+}
+
+#[cfg(target_os = "macos")]
+fn codex_hook<'a>(
+    snapshot: &'a InventorySnapshot,
+    name: &str,
+    project_path: Option<&Path>,
+    ordinal: usize,
+) -> &'a InventoryRecord {
+    let project_path = project_path.map(|path| {
+        fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .display()
+            .to_string()
+    });
+    snapshot
+        .records
+        .iter()
+        .filter(|record| {
+            record.client == ClientKind::Codex
+                && record.item_type == InventoryItemType::Hook
+                && record.name == name
+                && record.project_path.as_deref() == project_path.as_deref()
+        })
+        .nth(ordinal)
+        .expect("Codex hook fixture should be discovered")
 }
 
 fn write(path: &Path, content: &str) {

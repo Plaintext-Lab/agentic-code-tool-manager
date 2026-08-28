@@ -3,6 +3,7 @@ mod atomic_config;
 mod claude;
 mod claude_policy;
 mod codex;
+mod codex_hook_config;
 mod codex_mcp_config;
 mod codex_skill_config;
 mod config;

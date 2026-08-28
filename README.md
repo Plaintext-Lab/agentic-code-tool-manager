@@ -30,7 +30,13 @@ Claude Code configuration is scattered across your filesystem—`~/.claude.json`
 
 ## Features
 
-**Cross-Client Inventory** — See skills, MCP servers, and hooks discovered from Claude, Codex, and Cursor in one view, including effective precedence and Claude managed policy. On macOS, eligible Codex skills and MCP servers can be enabled or disabled after confirming their exact client, scope, project, state, and source. Every change uses Codex's native enabled state, rejects stale scans, writes atomically, preserves the rest of the configuration, and verifies the result with a fresh scan. Restart Codex after a successful change so the new state takes effect. Managed, administrator, policy-controlled, plugin-owned, malformed, linked, unsupported, and non-macOS sources remain read-only. Protected configuration values stay hidden.
+**Cross-Client Inventory** — See skills, MCP servers, and hooks discovered from Claude, Codex, and Cursor in one view, including effective precedence and Claude managed policy.
+On macOS, eligible Codex skills, MCP servers, and hooks can be enabled or disabled after confirming their exact client, scope, project, state, and source.
+Hook enablement never changes trust: untrusted or changed hooks remain visibly untrusted and cannot run until approved through Codex's separate trust workflow.
+Every change uses Codex's native enabled state, rejects stale scans, writes atomically, preserves the rest of the configuration, and verifies the result with a fresh scan.
+Restart Codex after a successful change so the new state takes effect.
+Managed, administrator, policy-controlled, plugin-owned, malformed, linked, unsupported, and non-macOS sources remain read-only.
+Protected configuration values stay hidden.
 
 **MCP Testing** — Connect to any MCP server and execute its tools directly from the app. Validate your configurations actually work before assigning them to projects.
 

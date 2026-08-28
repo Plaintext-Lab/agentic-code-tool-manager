@@ -7,6 +7,14 @@ pub(super) struct CodexHookState<'a> {
     pub(super) config: Option<&'a toml::Value>,
 }
 
+pub(super) struct CodexHookEvaluation {
+    pub(super) enabled: bool,
+    pub(super) trust_state: TrustState,
+    pub(super) approval_pending: bool,
+    pub(super) state_key: String,
+    pub(super) action_supported: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn codex_effective_state(
     state: &CodexHookState<'_>,
@@ -16,9 +24,8 @@ pub(super) fn codex_effective_state(
     handler_type: &str,
     group_index: usize,
     handler_index: usize,
-    enabled: bool,
     base_trust: TrustState,
-) -> (bool, TrustState, bool) {
+) -> CodexHookEvaluation {
     let event_key = event_key(event);
     let key = format!(
         "{}:{event_key}:{group_index}:{handler_index}",
@@ -30,15 +37,15 @@ pub(super) fn codex_effective_state(
         .and_then(|hooks| hooks.get("state"))
         .and_then(toml::Value::as_table)
         .and_then(|states| states.get(&key));
-    let enabled = enabled
-        && persisted
-            .and_then(|entry| entry.get("enabled"))
-            .and_then(toml::Value::as_bool)
-            != Some(false);
+    let enabled = persisted
+        .and_then(|entry| entry.get("enabled"))
+        .and_then(toml::Value::as_bool)
+        != Some(false);
     let current_hash = codex_hook_hash(&event_key, group, handler, handler_type);
     let trusted_hash = persisted
         .and_then(|entry| entry.get("trusted_hash"))
         .and_then(toml::Value::as_str);
+    let action_supported = current_hash.is_some() && event_handler_supported(event, handler_type);
     let hook_trust = match (current_hash.as_deref(), trusted_hash) {
         (Some(current), Some(trusted)) if current == trusted => TrustState::Trusted,
         _ => TrustState::Untrusted,
@@ -49,7 +56,33 @@ pub(super) fn codex_effective_state(
         (_, trust) => trust,
     };
     let approval_pending = enabled && hook_trust != TrustState::Trusted;
-    (enabled, trust, approval_pending)
+    CodexHookEvaluation {
+        enabled,
+        trust_state: trust,
+        approval_pending,
+        state_key: key,
+        action_supported,
+    }
+}
+
+fn event_handler_supported(event: &str, handler_type: &str) -> bool {
+    let known_event = matches!(
+        event,
+        "PreToolUse"
+            | "PermissionRequest"
+            | "PostToolUse"
+            | "PreCompact"
+            | "PostCompact"
+            | "SessionStart"
+            | "SessionEnd"
+            | "UserPromptSubmit"
+            | "SubagentStart"
+            | "SubagentStop"
+            | "Stop"
+            | "Interrupt"
+    );
+    known_event
+        && (handler_type == "command" || (handler_type == "mcp_tool" && event != "SessionEnd"))
 }
 
 fn codex_hook_hash(
