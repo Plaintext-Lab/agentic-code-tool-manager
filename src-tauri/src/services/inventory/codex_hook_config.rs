@@ -6,6 +6,9 @@ pub(super) fn codex_hook_state_is_editable(config: Option<&toml::Value>, state_k
     let Some(hooks) = config.and_then(|config| config.get("hooks")) else {
         return true;
     };
+    let Some(hooks) = hooks.as_table() else {
+        return false;
+    };
     let Some(state) = hooks.get("state") else {
         return true;
     };

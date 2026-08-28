@@ -2706,6 +2706,32 @@ fn malformed_codex_hook_state_is_read_only_without_exposing_secrets() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn malformed_codex_hooks_container_is_read_only_without_exposing_secrets() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    write(
+        &codex_home.join("hooks.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"DO_NOT_EXPOSE"}]}]}}"#,
+    );
+    write(&config_path, "hooks = \"SECRET_INVALID_HOOKS_CONTAINER\"\n");
+
+    let snapshot = discover_inventory_with_codex_home(home, codex_home, Vec::new());
+    let record = codex_hook(&snapshot, "Stop hook", None, 0);
+    assert!(!record.action_capabilities.enable.available);
+    assert!(!record.action_capabilities.disable.available);
+    assert_eq!(
+        record.action_capabilities.enable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+    let serialized = serde_json::to_string(&snapshot).unwrap();
+    assert!(!serialized.contains("DO_NOT_EXPOSE"));
+    assert!(!serialized.contains("SECRET_INVALID_HOOKS_CONTAINER"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn malformed_codex_skill_configuration_is_read_only() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");
