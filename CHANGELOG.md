@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Inventory Action Explanations**: Inventory records now report safe native enable and disable availability, confirmation and restart guidance, source revisions, and translated reasons when a source must remain read-only. (#12)
 
 ### Fixed
-- **Rust 1.98 Clippy Compatibility**: Updated backend shutdown iteration for the current zero-warning lint gate.
+- **Current Rust CI Compatibility**: Updated backend shutdown iteration for the zero-warning lint gate and made inventory test fixtures emit platform-safe JSON and TOML paths.
 - **Inventory Trust Labels**: Codex user and plugin hooks now describe hook trust instead of incorrectly labelling it as project trust.
 - **Cross-Client Effective Status**: Inventory status now respects duplicate skill precedence, Claude project and managed policy, Codex trust and hook settings, and Windows path normalization. Inventory labels are translated in all supported languages. (#2)
 

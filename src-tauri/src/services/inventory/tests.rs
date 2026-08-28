@@ -18,6 +18,14 @@ const CURSOR_MCP: &str = include_str!("fixtures/cursor_mcp.json");
 const CURSOR_HOOKS: &str = include_str!("fixtures/cursor_hooks.json");
 const SKILL: &str = include_str!("fixtures/skill.md");
 
+fn json_string(value: impl AsRef<str>) -> String {
+    serde_json::to_string(value.as_ref()).unwrap()
+}
+
+fn toml_string(value: impl AsRef<str>) -> String {
+    toml_edit::Value::from(value.as_ref()).to_string()
+}
+
 #[test]
 fn discovers_all_clients_and_never_serializes_secret_values() {
     let fixture = TempDir::new().unwrap();
@@ -620,8 +628,8 @@ fn claude_project_trust_applies_to_project_skills() {
     write(
         &home.join(".claude.json"),
         &format!(
-            r#"{{"projects":{{"{}":{{"hasTrustDialogAccepted":false}}}}}}"#,
-            project.display()
+            r#"{{"projects":{{{}:{{"hasTrustDialogAccepted":false}}}}}}"#,
+            json_string(project.display().to_string())
         ),
     );
     write_skill(&project.join(".claude/skills/untrusted-skill/SKILL.md"));
@@ -712,14 +720,14 @@ fn codex_hook_trust_requires_the_current_handler_hash() {
     write(
         &config_path,
         &format!(
-            r#"[hooks.state."{}:pre_tool_use:0:0"]
+            r#"[hooks.state.{}]
 trusted_hash = "sha256:620fb822b32c78c73a2c5817199b662d4e82c221d93dd1b85bf843cf8fec7785"
 
-[hooks.state."{}:pre_tool_use:1:0"]
+[hooks.state.{}]
 trusted_hash = "sha256:620fb822b32c78c73a2c5817199b662d4e82c221d93dd1b85bf843cf8fec7785"
 "#,
-            hooks_path.display(),
-            hooks_path.display()
+            toml_string(format!("{}:pre_tool_use:0:0", hooks_path.display())),
+            toml_string(format!("{}:pre_tool_use:1:0", hooks_path.display()))
         ),
     );
 
@@ -774,12 +782,12 @@ fn discovers_components_from_configured_codex_plugins() {
         &format!(
             r#"[marketplaces.local]
 source_type = "local"
-source = "{}"
+source = {}
 
 [plugins."demo@local"]
 enabled = true
 "#,
-            marketplace.display()
+            toml_string(marketplace.display().to_string())
         ),
     );
 
@@ -836,13 +844,13 @@ fn applies_claude_project_disable_and_trust_state() {
         &format!(
             r#"{{
                 "projects": {{
-                    "{}": {{
+                    {}: {{
                         "disabledMcpjsonServers": ["shared"],
                         "hasTrustDialogAccepted": false
                     }}
                 }}
             }}"#,
-            project.display()
+            json_string(project.display().to_string())
         ),
     );
     write(
@@ -940,19 +948,19 @@ fn pending_claude_project_mcp_is_not_effective() {
         &format!(
             r#"{{
                 "projects": {{
-                    "{}": {{
+                    {}: {{
                         "enabledMcpjsonServers": ["approved"],
                         "disabledMcpjsonServers": [],
                         "hasTrustDialogAccepted": true
                     }},
-                    "{}": {{
+                    {}: {{
                         "enableAllProjectMcpServers": true,
                         "hasTrustDialogAccepted": true
                     }}
                 }}
             }}"#,
-            project.display(),
-            allow_all_project.display()
+            json_string(project.display().to_string()),
+            json_string(allow_all_project.display().to_string())
         ),
     );
     write(
@@ -1010,10 +1018,10 @@ fn claude_hook_disable_uses_highest_precedence_setting() {
     write(
         &home.join(".claude.json"),
         &format!(
-            r#"{{"projects":{{"{}":{{"hasTrustDialogAccepted":true}},"{}":{{"hasTrustDialogAccepted":true}},"{}":{{"hasTrustDialogAccepted":true}}}}}}"#,
-            inherited_project.display(),
-            local_project.display(),
-            enabled_project.display()
+            r#"{{"projects":{{{}:{{"hasTrustDialogAccepted":true}},{}:{{"hasTrustDialogAccepted":true}},{}:{{"hasTrustDialogAccepted":true}}}}}}"#,
+            json_string(inherited_project.display().to_string()),
+            json_string(local_project.display().to_string()),
+            json_string(enabled_project.display().to_string())
         ),
     );
     for project in [&inherited_project, &local_project, &enabled_project] {
@@ -1308,8 +1316,8 @@ fn disabled_project_mcp_still_shadows_user_definition() {
     write(
         &home.join(".codex/config.toml"),
         &format!(
-            "[mcp_servers.shared]\ncommand = 'user'\n\n[projects.\"{}\"]\ntrust_level = 'trusted'\n",
-            project.display()
+            "[mcp_servers.shared]\ncommand = 'user'\n\n[projects.{}]\ntrust_level = 'trusted'\n",
+            toml_string(project.display().to_string())
         ),
     );
     write(
@@ -1437,7 +1445,7 @@ fn required_skill_name_missing_is_not_effective() {
     assert_eq!(skill.enabled, Some(true));
     assert_eq!(skill.is_effective, Some(false));
     assert!(snapshot.warnings.iter().any(|warning| {
-        warning.source_path.ends_with("missing-name/SKILL.md")
+        Path::new(&warning.source_path).ends_with(Path::new("missing-name").join("SKILL.md"))
             && warning.message.contains("frontmatter name")
     }));
 }
