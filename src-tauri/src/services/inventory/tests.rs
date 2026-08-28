@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use super::actions::{
     set_inventory_record_enabled_with_paths, InventoryActionError, InventoryActionRequest,
 };
