@@ -357,9 +357,11 @@ fn parse_frontmatter_name(content: &str) -> Option<String> {
     }
     let mut name = None;
     for line in lines {
-        let line = line.trim();
-        if line == "---" {
+        if line.trim() == "---" {
             return name;
+        }
+        if line.starts_with(char::is_whitespace) {
+            continue;
         }
         let Some(value) = line.strip_prefix("name:") else {
             continue;
@@ -409,6 +411,15 @@ mod tests {
     #[test]
     fn ignores_name_outside_frontmatter() {
         assert_eq!(parse_frontmatter_name("# Skill\nname: unsafe"), None);
+    }
+
+    #[test]
+    fn ignores_nested_and_block_scalar_names() {
+        let nested = "---\nmetadata:\n  name: nested\n---\nBody";
+        let block_scalar = "---\ndescription: |\n  name: prose-only\n---\nBody";
+
+        assert_eq!(parse_frontmatter_name(nested), None);
+        assert_eq!(parse_frontmatter_name(block_scalar), None);
     }
 
     #[test]

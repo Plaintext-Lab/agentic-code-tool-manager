@@ -727,6 +727,31 @@ fn unclosed_skill_frontmatter_is_not_effective() {
 }
 
 #[test]
+fn nested_frontmatter_name_does_not_offer_codex_actions() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    write(
+        &home.join(".agents/skills/folder-name/SKILL.md"),
+        "---\nmetadata:\n  name: nested-name\n---\nBody\n",
+    );
+
+    let snapshot = discover_inventory(home, Vec::new());
+    let skill = snapshot
+        .records
+        .iter()
+        .find(|record| record.client == ClientKind::Codex && record.name == "folder-name")
+        .expect("malformed skill should remain visible by its folder name");
+
+    assert_eq!(skill.is_effective, Some(false));
+    assert!(!skill.action_capabilities.enable.available);
+    assert!(!skill.action_capabilities.disable.available);
+    assert_eq!(
+        skill.action_capabilities.enable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+}
+
+#[test]
 fn codex_hook_trust_requires_the_current_handler_hash() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");
