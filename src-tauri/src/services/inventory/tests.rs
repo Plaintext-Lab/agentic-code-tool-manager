@@ -148,22 +148,45 @@ fn reports_normalized_action_capabilities_for_each_client_boundary() {
             .expect("fixture record should be discovered")
     };
 
-    for name in ["claude-server", "codex-server"] {
-        let actions = &record(name).action_capabilities;
-        assert!(!actions.enable.available);
+    let claude_actions = &record("claude-server").action_capabilities;
+    assert!(!claude_actions.enable.available);
+    assert_eq!(
+        claude_actions.enable.blocked_reason,
+        Some(ActionBlockedReason::AlreadyEnabled)
+    );
+    assert!(claude_actions.disable.available);
+    assert_eq!(claude_actions.disable.blocked_reason, None);
+    assert!(claude_actions.confirmation_required);
+    assert_eq!(
+        claude_actions.reload_guidance,
+        ReloadGuidance::RestartClient
+    );
+
+    let codex_actions = &record("codex-server").action_capabilities;
+    if cfg!(target_os = "macos") {
+        assert!(!codex_actions.enable.available);
         assert_eq!(
-            actions.enable.blocked_reason,
+            codex_actions.enable.blocked_reason,
             Some(ActionBlockedReason::AlreadyEnabled)
         );
-        assert!(actions.disable.available);
-        assert_eq!(actions.disable.blocked_reason, None);
-        assert!(actions.confirmation_required);
-        assert_eq!(actions.reload_guidance, ReloadGuidance::RestartClient);
-        assert!(actions
-            .source_revision
-            .as_deref()
-            .is_some_and(|revision| revision.starts_with("sha256:")));
+        assert!(codex_actions.disable.available);
+        assert_eq!(codex_actions.disable.blocked_reason, None);
+        assert!(codex_actions.confirmation_required);
+        assert_eq!(codex_actions.reload_guidance, ReloadGuidance::RestartClient);
+    } else {
+        assert!(!codex_actions.enable.available);
+        assert!(!codex_actions.disable.available);
+        assert_eq!(
+            codex_actions.disable.blocked_reason,
+            Some(ActionBlockedReason::UnsupportedByClient)
+        );
+        assert!(!codex_actions.confirmation_required);
+        assert_eq!(codex_actions.reload_guidance, ReloadGuidance::NotRequired);
     }
+    assert!(codex_actions
+        .source_revision
+        .as_deref()
+        .is_some_and(|revision| revision.starts_with("sha256:")));
     let first_codex_revision = record("codex-server")
         .action_capabilities
         .source_revision
