@@ -2107,6 +2107,67 @@ fn codex_skill_config_matches_the_volume_case_and_unicode_rules() {
     assert!(record.action_capabilities.enable.available);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_skill_config_normalizes_safe_parent_segments() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let skills_root = home.join(".agents/skills");
+    let skill_file = skills_root.join("parent-path-skill/SKILL.md");
+    write_skill(&skill_file);
+    fs::create_dir_all(skills_root.join("group")).unwrap();
+    let configured_folder = skills_root.join("group/../parent-path-skill");
+    write(
+        &codex_home.join("config.toml"),
+        &format!(
+            "[[skills.config]]\npath = '{}'\nenabled = false\n",
+            configured_folder.display()
+        ),
+    );
+
+    let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+    let record = codex_skill(&initial, "shared-skill", None);
+    assert_eq!(record.enabled, Some(false));
+
+    set_inventory_record_enabled_with_paths(
+        home,
+        codex_home.clone(),
+        Vec::new(),
+        InventoryActionRequest {
+            record_id: record.id.clone(),
+            enabled: true,
+            source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap();
+
+    let config: toml::Value =
+        toml::from_str(&fs::read_to_string(codex_home.join("config.toml")).unwrap()).unwrap();
+    let entries = config["skills"]["config"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["enabled"].as_bool(), Some(true));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_path_normalization_does_not_cross_a_symlink_parent() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = TempDir::new().unwrap();
+    let skills_root = fixture.path().join("skills");
+    let elsewhere = fixture.path().join("elsewhere/nested");
+    fs::create_dir_all(skills_root.join("foo")).unwrap();
+    fs::create_dir_all(elsewhere.parent().unwrap().join("foo")).unwrap();
+    fs::create_dir_all(&elsewhere).unwrap();
+    symlink(&elsewhere, skills_root.join("alias")).unwrap();
+
+    assert!(!super::skills::codex_paths_match(
+        &skills_root.join("foo"),
+        &skills_root.join("alias/../foo"),
+    ));
+}
+
 fn codex_skill<'a>(
     snapshot: &'a InventorySnapshot,
     name: &str,

@@ -62,21 +62,7 @@ pub(super) fn restore_backup_if_matches(
         .is_ok_and(|contents| contents == expected);
 
     if displaced_matches {
-        match rename_exclusive(backup, target) {
-            Ok(()) => {
-                return std::fs::remove_file(quarantine)
-                    .map_err(|_| ConfigWriteError::RollbackFailed);
-            }
-            Err(ConfigWriteError::SourceChanged) => {
-                let _ = std::fs::remove_file(quarantine);
-                let _ = std::fs::remove_file(backup);
-                return Err(ConfigWriteError::RollbackFailed);
-            }
-            Err(_) => {
-                let _ = rename_exclusive(quarantine, target);
-                return Err(ConfigWriteError::RollbackFailed);
-            }
-        }
+        return restore_matching_backup(target, backup, quarantine);
     }
 
     match restore_quarantine_without_overwrite(quarantine, target) {
@@ -86,6 +72,25 @@ pub(super) fn restore_backup_if_matches(
         Err(error) => return Err(error),
     }
     Err(ConfigWriteError::RollbackFailed)
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn restore_matching_backup(
+    target: &Path,
+    backup: &Path,
+    quarantine: &Path,
+) -> Result<(), ConfigWriteError> {
+    match rename_exclusive(backup, target) {
+        Ok(()) => std::fs::remove_file(quarantine).map_err(|_| ConfigWriteError::RollbackFailed),
+        Err(ConfigWriteError::SourceChanged) => {
+            let _ = std::fs::remove_file(quarantine);
+            Err(ConfigWriteError::RollbackFailed)
+        }
+        Err(_) => {
+            let _ = rename_exclusive(quarantine, target);
+            Err(ConfigWriteError::RollbackFailed)
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

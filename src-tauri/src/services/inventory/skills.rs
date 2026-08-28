@@ -232,12 +232,44 @@ pub(super) fn codex_paths_match(left: &Path, right: &Path) -> bool {
     }
     #[cfg(target_os = "macos")]
     {
-        paths_identify_the_same_directory_entries(left, right)
+        let normalized_left = normalize_safe_parent_segments(left);
+        let normalized_right = normalize_safe_parent_segments(right);
+        normalized_left == normalized_right
+            || paths_identify_the_same_directory_entries(&normalized_left, &normalized_right)
     }
     #[cfg(not(target_os = "macos"))]
     {
         false
     }
+}
+
+#[cfg(target_os = "macos")]
+fn normalize_safe_parent_segments(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let previous_is_normal = matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                );
+                let can_collapse = previous_is_normal
+                    && std::fs::symlink_metadata(&normalized).is_ok_and(|metadata| {
+                        metadata.is_dir() && !metadata.file_type().is_symlink()
+                    });
+                if can_collapse {
+                    normalized.pop();
+                } else {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 #[cfg(target_os = "macos")]

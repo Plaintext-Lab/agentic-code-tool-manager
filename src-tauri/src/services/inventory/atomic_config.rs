@@ -10,6 +10,52 @@ mod platform;
 pub(super) struct ConfigSource {
     pub(super) target_path: PathBuf,
     pub(super) contents: Option<Vec<u8>>,
+    #[cfg(target_os = "macos")]
+    symlink_guard: Option<ConfigSymlinkGuard>,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+struct ConfigSymlinkGuard {
+    link_path: PathBuf,
+    link_target: PathBuf,
+    resolved_target: PathBuf,
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(target_os = "macos")]
+impl ConfigSymlinkGuard {
+    fn capture(
+        link_path: &Path,
+        metadata: &fs::Metadata,
+        resolved_target: PathBuf,
+    ) -> Result<Self, InventoryActionError> {
+        use std::os::unix::fs::MetadataExt;
+
+        let link_target =
+            fs::read_link(link_path).map_err(|_| InventoryActionError::UnsafeConfiguration)?;
+        Ok(Self {
+            link_path: link_path.to_path_buf(),
+            link_target,
+            resolved_target,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+
+    fn is_current(&self) -> bool {
+        use std::os::unix::fs::MetadataExt;
+
+        let Ok(metadata) = fs::symlink_metadata(&self.link_path) else {
+            return false;
+        };
+        metadata.file_type().is_symlink()
+            && metadata.dev() == self.device
+            && metadata.ino() == self.inode
+            && fs::read_link(&self.link_path).is_ok_and(|target| target == self.link_target)
+            && fs::canonicalize(&self.link_path).is_ok_and(|target| target == self.resolved_target)
+    }
 }
 
 impl ConfigSource {
@@ -25,10 +71,22 @@ impl ConfigSource {
                 }
                 let contents = fs::read(&target_path)
                     .map_err(|_| InventoryActionError::UnsafeConfiguration)?;
-                Ok(Self {
+                #[cfg(target_os = "macos")]
+                let symlink_guard = Some(ConfigSymlinkGuard::capture(
+                    config_path,
+                    &metadata,
+                    target_path.clone(),
+                )?);
+                let source = Self {
                     target_path,
                     contents: Some(contents),
-                })
+                    #[cfg(target_os = "macos")]
+                    symlink_guard,
+                };
+                source
+                    .validate_config_entry()
+                    .map_err(|_| InventoryActionError::UnsafeConfiguration)?;
+                Ok(source)
             }
             Ok(metadata) if metadata.is_file() => {
                 let contents =
@@ -36,15 +94,31 @@ impl ConfigSource {
                 Ok(Self {
                     target_path: config_path.to_path_buf(),
                     contents: Some(contents),
+                    #[cfg(target_os = "macos")]
+                    symlink_guard: None,
                 })
             }
             Ok(_) => Err(InventoryActionError::UnsafeConfiguration),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self {
                 target_path: config_path.to_path_buf(),
                 contents: None,
+                #[cfg(target_os = "macos")]
+                symlink_guard: None,
             }),
             Err(_) => Err(InventoryActionError::UnsafeConfiguration),
         }
+    }
+
+    fn validate_config_entry(&self) -> Result<(), ConfigWriteError> {
+        #[cfg(target_os = "macos")]
+        if self
+            .symlink_guard
+            .as_ref()
+            .is_some_and(|guard| !guard.is_current())
+        {
+            return Err(ConfigWriteError::SourceChanged);
+        }
+        Ok(())
     }
 }
 
@@ -63,6 +137,7 @@ pub(super) struct AtomicConfigWriter;
 
 impl ConfigWriter for AtomicConfigWriter {
     fn replace(&self, source: &ConfigSource, updated: &[u8]) -> Result<(), ConfigWriteError> {
+        source.validate_config_entry()?;
         let current = match fs::read(&source.target_path) {
             Ok(contents) => Some(contents),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -71,6 +146,7 @@ impl ConfigWriter for AtomicConfigWriter {
         if current.as_deref() != source.contents.as_deref() {
             return Err(ConfigWriteError::SourceChanged);
         }
+        source.validate_config_entry()?;
         let parent = source.target_path.parent().ok_or(ConfigWriteError::Io)?;
         fs::create_dir_all(parent).map_err(|_| ConfigWriteError::Io)?;
         let temp_path = sidecar_path(&source.target_path, "tmp")?;
@@ -109,6 +185,7 @@ fn write_and_replace(
             .open(temp_path)
             .and_then(|file| file.sync_all())
             .map_err(|_| ConfigWriteError::Io)?;
+        source.validate_config_entry()?;
         replace_existing_guarded(temp_path, target_path, source, updated)?;
     } else {
         platform::commit_new(temp_path, target_path)?;
@@ -140,6 +217,10 @@ fn replace_existing_guarded(
         {
             rollback_if_update_is_current(target_path, &backup_path, updated)?;
             return Err(ConfigWriteError::Io);
+        }
+        if let Err(error) = source.validate_config_entry() {
+            rollback_if_update_is_current(target_path, &backup_path, updated)?;
+            return Err(error);
         }
         if fs::remove_file(&backup_path).is_err() {
             rollback_if_update_is_current(target_path, &backup_path, updated)?;
@@ -194,6 +275,8 @@ pub(super) fn restore_original(
             let written_source = ConfigSource {
                 target_path: source.target_path.clone(),
                 contents: Some(written.to_vec()),
+                #[cfg(target_os = "macos")]
+                symlink_guard: None,
             };
             AtomicConfigWriter
                 .replace(&written_source, original)
@@ -332,6 +415,52 @@ mod tests {
         assert_eq!(fs::read(config_path).unwrap(), b"# newer save\n");
         assert!(!backup_path.exists());
         assert!(!quarantine_path.exists());
+    }
+
+    #[test]
+    fn retains_the_displaced_backup_when_another_save_wins_the_restore_race() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        let backup_path = fixture.path().join(".config.backup");
+        let quarantine_path = fixture.path().join(".config.rollback-current");
+        fs::write(&config_path, "# newest save\n").unwrap();
+        fs::write(&backup_path, "# displaced concurrent edit\n").unwrap();
+        fs::write(&quarantine_path, "# requested update\n").unwrap();
+
+        let error = platform::restore_matching_backup(&config_path, &backup_path, &quarantine_path)
+            .unwrap_err();
+
+        assert_eq!(error, ConfigWriteError::RollbackFailed);
+        assert_eq!(fs::read(config_path).unwrap(), b"# newest save\n");
+        assert_eq!(
+            fs::read(backup_path).unwrap(),
+            b"# displaced concurrent edit\n"
+        );
+        assert!(!quarantine_path.exists());
+    }
+
+    #[test]
+    fn rejects_a_config_symlink_retargeted_after_validation() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = TempDir::new().unwrap();
+        let original_target = fixture.path().join("original.toml");
+        let newer_target = fixture.path().join("newer.toml");
+        let config_path = fixture.path().join("config.toml");
+        fs::write(&original_target, "# original\n").unwrap();
+        fs::write(&newer_target, "# newer\n").unwrap();
+        symlink(&original_target, &config_path).unwrap();
+        let source = ConfigSource::read(&config_path).unwrap();
+        fs::remove_file(&config_path).unwrap();
+        symlink(&newer_target, &config_path).unwrap();
+
+        let error = AtomicConfigWriter
+            .replace(&source, b"# requested\n")
+            .unwrap_err();
+
+        assert_eq!(error, ConfigWriteError::SourceChanged);
+        assert_eq!(fs::read(original_target).unwrap(), b"# original\n");
+        assert_eq!(fs::read(newer_target).unwrap(), b"# newer\n");
     }
 
     #[test]
