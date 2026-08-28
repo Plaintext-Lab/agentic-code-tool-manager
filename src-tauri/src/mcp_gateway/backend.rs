@@ -452,7 +452,7 @@ impl GatewayBackendManager {
     /// Shutdown all backend connections
     pub fn shutdown(&mut self) {
         info!("[Gateway] Shutting down all backend connections");
-        for (_mcp_id, backend) in self.backends.iter_mut() {
+        for backend in self.backends.values_mut() {
             if let Some(client) = backend.client.take() {
                 info!("[Gateway] Closing connection to MCP {}", backend.mcp.name);
                 drop(client);
