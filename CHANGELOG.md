@@ -8,14 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plane Issue Sync**: New GitHub issues now receive the `plane` label automatically so they synchronize with the repository's Plane project.
 - **Agent Workflow Configuration**: Added repository-local guidance for GitHub issue tracking, triage labels, and domain documentation used by engineering skills.
 - **Cross-Client Inventory**: Added a read-only inventory of skills, MCP servers, and hooks discovered from Claude, Codex, and Cursor user, registered-project, and enabled Codex plugin locations. The inventory shows provenance, disabled and trusted state, symlink targets, and safe source warnings without displaying MCP commands, headers, environment values, or hook contents. (#2)
 - **Inventory Action Explanations**: Inventory records now report safe native enable and disable availability, confirmation and restart guidance, source revisions, and translated reasons when a source must remain read-only. (#12)
 - **Codex Skill Toggles**: On macOS, eligible Codex skills can now be safely enabled or disabled from inventory. Changes require confirmation, reject stale scans, preserve skill definitions and configuration symlinks, use atomic writes, and verify the result with a fresh scan. (#13)
 
 ### Fixed
+- **Rust 1.98 Clippy Compatibility**: Updated backend shutdown iteration for the current zero-warning lint gate.
 - **Inventory Trust Labels**: Codex user and plugin hooks now describe hook trust instead of incorrectly labelling it as project trust.
 - **Cross-Client Effective Status**: Inventory status now respects duplicate skill precedence, Claude project and managed policy, Codex trust and hook settings, and Windows path normalization. Inventory labels are translated in all supported languages. (#2)
+
+### Changed
+- **macOS-Focused Delivery**: Stopped building, testing, and publishing Windows artifacts for this personal macOS fork without removing the existing Windows application code.
 
 ## [3.9.0] - 2026-05-04
 
