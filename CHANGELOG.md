@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Inventory Trust Labels**: Codex user and plugin hooks now describe hook trust instead of incorrectly labelling it as project trust.
 - **Cross-Client Effective Status**: Inventory status now respects duplicate skill precedence, Claude project and managed policy, Codex trust and hook settings, and Windows path normalization. Inventory labels are translated in all supported languages. (#2)
 
+### Changed
+- **macOS-Focused Delivery**: Stopped building, testing, and publishing Windows artifacts for this personal macOS fork without removing the existing Windows application code.
+
 ## [3.9.0] - 2026-05-04
 
 ### Added
