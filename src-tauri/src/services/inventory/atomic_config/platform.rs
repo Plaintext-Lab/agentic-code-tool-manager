@@ -26,9 +26,16 @@ fn identity_from_metadata(metadata: &std::fs::Metadata) -> FileIdentity {
 }
 
 #[cfg(target_os = "macos")]
+fn is_exclusive_regular_file(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    metadata.is_file() && metadata.nlink() == 1
+}
+
+#[cfg(target_os = "macos")]
 pub(super) fn file_identity(path: &Path) -> Result<FileIdentity, ConfigWriteError> {
     let metadata = std::fs::symlink_metadata(path).map_err(|_| ConfigWriteError::Io)?;
-    if !metadata.is_file() {
+    if !is_exclusive_regular_file(&metadata) {
         return Err(ConfigWriteError::SourceChanged);
     }
     Ok(identity_from_metadata(&metadata))
@@ -37,7 +44,7 @@ pub(super) fn file_identity(path: &Path) -> Result<FileIdentity, ConfigWriteErro
 #[cfg(target_os = "macos")]
 pub(super) fn file_identity_from_file(file: &File) -> Result<FileIdentity, ConfigWriteError> {
     let metadata = file.metadata().map_err(|_| ConfigWriteError::Io)?;
-    if !metadata.is_file() {
+    if !is_exclusive_regular_file(&metadata) {
         return Err(ConfigWriteError::SourceChanged);
     }
     Ok(identity_from_metadata(&metadata))

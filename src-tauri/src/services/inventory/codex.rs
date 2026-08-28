@@ -77,7 +77,8 @@ impl ClientAdapter for CodexAdapter {
             global_hooks_enabled,
             snapshot,
         );
-        let skill_config_is_editable = codex_skill_config_is_editable(global_config.as_ref());
+        let skill_config_is_editable = codex_skill_config_is_editable(global_config.as_ref())
+            && codex_skill_config_path_is_editable(&global_config_path);
         let codex_skill_sources: Vec<(PathBuf, Option<PathBuf>, Option<PathBuf>)> = snapshot
             .records
             .iter()
@@ -193,6 +194,23 @@ impl ClientAdapter for CodexAdapter {
             super::models::InventoryItemType::Mcp => {}
         }
         sources
+    }
+}
+
+fn codex_skill_config_path_is_editable(config_path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        match std::fs::symlink_metadata(config_path) {
+            Ok(metadata) => metadata.is_file() && metadata.nlink() == 1,
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = config_path;
+        true
     }
 }
 

@@ -1960,6 +1960,13 @@ fn codex_skill_action_rejects_a_symlink_backed_config() {
     let record = codex_skill(&initial, "shared-skill", None);
     let original = fs::read(&config_target).unwrap();
 
+    assert!(!record.action_capabilities.enable.available);
+    assert!(!record.action_capabilities.disable.available);
+    assert_eq!(
+        record.action_capabilities.enable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+
     let error = set_inventory_record_enabled_with_paths(
         home,
         codex_home,
@@ -1972,11 +1979,36 @@ fn codex_skill_action_rejects_a_symlink_backed_config() {
     )
     .unwrap_err();
 
-    assert_eq!(error, InventoryActionError::UnsafeConfiguration);
+    assert_eq!(error, InventoryActionError::ActionUnavailable);
     let link_metadata = fs::symlink_metadata(&config_link).unwrap();
     assert!(link_metadata.file_type().is_symlink());
     assert_eq!(fs::metadata(&config_target).unwrap().mode() & 0o777, 0o600);
     assert_eq!(fs::read(config_target).unwrap(), original);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_skill_action_marks_a_hard_linked_config_read_only() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    let managed_copy = fixture.path().join("managed-config.toml");
+    let skill_file = home.join(".agents/skills/hard-link-skill/SKILL.md");
+    write_skill(&skill_file);
+    write(&config_path, "# managed config\n");
+    fs::hard_link(&config_path, &managed_copy).unwrap();
+
+    let snapshot = discover_inventory_with_codex_home(home, codex_home, Vec::new());
+    let record = codex_skill(&snapshot, "shared-skill", None);
+
+    assert!(!record.action_capabilities.enable.available);
+    assert!(!record.action_capabilities.disable.available);
+    assert_eq!(
+        record.action_capabilities.enable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+    assert_eq!(fs::read(managed_copy).unwrap(), b"# managed config\n");
 }
 
 #[test]

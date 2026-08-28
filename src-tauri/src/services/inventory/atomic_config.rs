@@ -186,10 +186,6 @@ fn replace_existing_guarded(
             rollback_if_update_is_current(target_path, &backup_path, updated)?;
             return Err(ConfigWriteError::SourceChanged);
         }
-        if platform::remove_if_identity(&backup_path, source_identity).is_err() {
-            rollback_if_update_is_current(target_path, &backup_path, updated)?;
-            return Err(ConfigWriteError::Io);
-        }
         return Ok(());
     }
 
@@ -467,6 +463,54 @@ mod tests {
         assert_eq!(fs::read(config_path).unwrap(), b"# replacement\n");
         assert_eq!(fs::read(replacement_path).unwrap(), b"# original\n");
         assert!(backup_path.is_dir());
+    }
+
+    #[test]
+    fn retains_late_writes_to_the_displaced_config() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        fs::write(&config_path, "# original\n").unwrap();
+        let source = ConfigSource::read(&config_path).unwrap();
+        let mut concurrent_writer = OpenOptions::new().write(true).open(&config_path).unwrap();
+
+        AtomicConfigWriter
+            .replace(&source, b"# replacement\n")
+            .unwrap();
+        concurrent_writer.set_len(0).unwrap();
+        concurrent_writer
+            .write_all(b"# concurrent late write\n")
+            .unwrap();
+        concurrent_writer.sync_all().unwrap();
+        drop(concurrent_writer);
+
+        let backups: Vec<_> = fs::read_dir(fixture.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".backup"))
+            .collect();
+        assert_eq!(fs::read(&config_path).unwrap(), b"# replacement\n");
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            fs::read(backups[0].path()).unwrap(),
+            b"# concurrent late write\n"
+        );
+    }
+
+    #[test]
+    fn rejects_multiply_linked_configs_before_writing() {
+        let fixture = TempDir::new().unwrap();
+        let config_path = fixture.path().join("config.toml");
+        let managed_copy = fixture.path().join("managed-config.toml");
+        fs::write(&config_path, "# original\n").unwrap();
+        fs::hard_link(&config_path, &managed_copy).unwrap();
+
+        let result = ConfigSource::read(&config_path);
+
+        assert!(matches!(
+            result,
+            Err(InventoryActionError::UnsafeConfiguration)
+        ));
+        assert_eq!(fs::read(managed_copy).unwrap(), b"# original\n");
     }
 
     #[test]
