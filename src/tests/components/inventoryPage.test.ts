@@ -39,7 +39,22 @@ const snapshot: InventorySnapshot = {
 	scannedProjectCount: 0
 };
 
-describe('Inventory page skill actions', () => {
+const mcp: InventoryRecord = {
+	...skill,
+	id: 'codex:mcp:user:docs',
+	itemType: 'mcp',
+	name: 'docs',
+	sourceKind: 'userConfig',
+	sourcePath: '/Users/test/.codex/config.toml',
+	originalPath: '/Users/test/.codex/config.toml',
+	resolvedPath: '/Users/test/.codex/config.toml',
+	protectedFields: ['Environment variables'],
+	detail: 'STDIO MCP server'
+};
+
+const mcpSnapshot: InventorySnapshot = { ...snapshot, records: [mcp] };
+
+describe('Inventory page actions', () => {
 	beforeEach(() => {
 		vi.mocked(invoke).mockReset();
 	});
@@ -80,6 +95,60 @@ describe('Inventory page skill actions', () => {
 		expect(within(alert).getByRole('button', { name: 'Scan again' })).toBeInTheDocument();
 		expect(screen.getByText('toggle-me')).toBeInTheDocument();
 		expect(screen.getByText('Enabled')).toBeInTheDocument();
+	});
+
+	it('reports an MCP-specific failure while keeping its prior state visible', async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === 'get_tool_inventory') return mcpSnapshot;
+			throw 'The inventory changed after it was scanned. Scan again and retry.';
+		});
+		render(InventoryPage);
+		await screen.findByText('docs');
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Disable docs' }));
+		await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Disable' }));
+
+		const alert = await screen.findByRole('alert');
+		expect(within(alert).getByText('MCP server state was not changed')).toBeInTheDocument();
+		expect(within(alert).getByText('The MCP server could not be updated. Scan again and retry.')).toBeInTheDocument();
+		expect(screen.getByText('docs')).toBeInTheDocument();
+		expect(screen.getByText('Enabled')).toBeInTheDocument();
+	});
+
+	it('renders the freshly read Codex MCP state after a successful action', async () => {
+		const disabledMcp: InventoryRecord = {
+			...mcp,
+			enabled: false,
+			isEffective: false,
+			actionCapabilities: {
+				...mcp.actionCapabilities,
+				enable: { available: true, blockedReason: null },
+				disable: { available: false, blockedReason: 'alreadyDisabled' },
+				sourceRevision: 'sha256:updated-revision'
+			}
+		};
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === 'get_tool_inventory') return mcpSnapshot;
+			if (command === 'set_inventory_record_enabled') {
+				return { ...mcpSnapshot, records: [disabledMcp] };
+			}
+			throw new Error(`Unexpected command: ${command}`);
+		});
+		render(InventoryPage);
+		await screen.findByText('docs');
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Disable docs' }));
+		await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Disable' }));
+
+		await waitFor(() => {
+			expect(invoke).toHaveBeenCalledWith('set_inventory_record_enabled', {
+				recordId: mcp.id,
+				enabled: false,
+				sourceRevision: 'sha256:exact-revision'
+			});
+		});
+		expect(await screen.findByText('Disabled')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Enable docs' })).toBeInTheDocument();
 	});
 
 	it('clears old action banners when a fresh scan succeeds', async () => {

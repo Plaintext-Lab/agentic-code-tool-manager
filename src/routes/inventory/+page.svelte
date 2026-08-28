@@ -16,6 +16,7 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let actionError = $state<string | null>(null);
+	let actionErrorItemType = $state<InventoryItemType | null>(null);
 	let actionSuccess = $state<string | null>(null);
 	let actionRecord = $state<InventoryRecord | null>(null);
 	let desiredEnabled = $state(false);
@@ -45,6 +46,7 @@
 		loading = true;
 		error = null;
 		actionError = null;
+		actionErrorItemType = null;
 		actionSuccess = null;
 		try {
 			snapshot = await invoke<InventorySnapshot>('get_tool_inventory');
@@ -59,6 +61,7 @@
 	function requestAction(record: InventoryRecord, enabled: boolean) {
 		if (loading || actionLoading) return;
 		actionError = null;
+		actionErrorItemType = null;
 		actionSuccess = null;
 		actionRecord = record;
 		desiredEnabled = enabled;
@@ -68,7 +71,10 @@
 		if (actionLoading || !actionRecord) return;
 		const sourceRevision = actionRecord.actionCapabilities.sourceRevision;
 		if (!sourceRevision) {
-			actionError = i18n.t('inventory.actionErrorFallback');
+			actionErrorItemType = actionRecord.itemType;
+			actionError = i18n.t(actionRecord.itemType === 'mcp'
+				? 'inventory.mcpActionErrorFallback'
+				: 'inventory.actionErrorFallback');
 			actionRecord = null;
 			return;
 		}
@@ -88,8 +94,11 @@
 			});
 			actionRecord = null;
 		} catch (caught) {
-			console.error('[Inventory] Skill state update failed:', caught);
-			actionError = i18n.t('inventory.actionErrorFallback');
+			console.error('[Inventory] State update failed:', caught);
+			actionErrorItemType = changedRecord.itemType;
+			actionError = i18n.t(changedRecord.itemType === 'mcp'
+				? 'inventory.mcpActionErrorFallback'
+				: 'inventory.actionErrorFallback');
 			actionRecord = null;
 		} finally {
 			actionLoading = false;
@@ -126,7 +135,9 @@
 		{:else if snapshot}
 			{#if actionError}
 				<div class="card border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20" role="alert">
-					<h2 class="font-semibold text-red-800 dark:text-red-300">{i18n.t('inventory.actionErrorTitle')}</h2>
+					<h2 class="font-semibold text-red-800 dark:text-red-300">{i18n.t(actionErrorItemType === 'mcp'
+						? 'inventory.mcpActionErrorTitle'
+						: 'inventory.actionErrorTitle')}</h2>
 					<p class="mt-1 text-sm text-red-700 dark:text-red-400">{actionError}</p>
 					<button class="btn btn-secondary mt-3" onclick={loadInventory}>{i18n.t('inventory.scanAgain')}</button>
 				</div>

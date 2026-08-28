@@ -23,7 +23,12 @@
 		legacy: 'inventory.scopeLegacy'
 	};
 	const actionName = $derived(i18n.t(enabled ? 'common.enable' : 'common.disable'));
-	const title = $derived(i18n.t(enabled ? 'inventory.enableSkillTitle' : 'inventory.disableSkillTitle'));
+	const title = $derived(i18n.t(
+		record.itemType === 'mcp'
+			? (enabled ? 'inventory.enableMcpTitle' : 'inventory.disableMcpTitle')
+			: (enabled ? 'inventory.enableSkillTitle' : 'inventory.disableSkillTitle')
+	));
+	const itemLabel = $derived(i18n.t(record.itemType === 'mcp' ? 'inventory.confirmMcp' : 'inventory.confirmSkill'));
 	let dialogElement = $state<HTMLDivElement>();
 	let focusTarget = $state<HTMLDivElement>();
 	let previouslyFocused: HTMLElement | null = null;
@@ -96,7 +101,7 @@
 		</div>
 
 		<dl class="mt-5 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 rounded-lg bg-gray-50 p-4 text-sm dark:bg-gray-900/50">
-			<dt class="font-medium text-gray-500 dark:text-gray-400">{i18n.t('inventory.confirmSkill')}</dt>
+			<dt class="font-medium text-gray-500 dark:text-gray-400">{itemLabel}</dt>
 			<dd class="break-all text-gray-900 dark:text-white">{record.name}</dd>
 			<dt class="font-medium text-gray-500 dark:text-gray-400">{i18n.t('inventory.confirmClient')}</dt>
 			<dd class="text-gray-900 dark:text-white">{inventoryClientLabels[record.client]}</dd>

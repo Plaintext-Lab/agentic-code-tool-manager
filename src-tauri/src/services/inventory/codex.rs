@@ -78,7 +78,7 @@ impl ClientAdapter for CodexAdapter {
             snapshot,
         );
         let skill_config_is_editable = codex_skill_config_is_editable(global_config.as_ref())
-            && codex_skill_config_path_is_editable(&global_config_path);
+            && codex_config_path_is_editable(&global_config_path, &context.home_dir);
         let codex_skill_sources: Vec<(PathBuf, Option<PathBuf>, Option<PathBuf>)> = snapshot
             .records
             .iter()
@@ -122,6 +122,19 @@ impl ClientAdapter for CodexAdapter {
                 record.restrict_actions(ActionBlockedReason::MalformedSource);
             }
         }
+        for record in snapshot.records.iter_mut().filter(|record| {
+            record.client == ClientKind::Codex
+                && record.item_type == super::models::InventoryItemType::Mcp
+        }) {
+            let boundary = record
+                .project_path
+                .as_deref()
+                .map(Path::new)
+                .unwrap_or(&context.home_dir);
+            if !codex_config_path_is_editable(Path::new(&record.source_path), boundary) {
+                record.restrict_actions(ActionBlockedReason::MalformedSource);
+            }
+        }
     }
 
     fn action_capabilities(
@@ -132,7 +145,10 @@ impl ClientAdapter for CodexAdapter {
         if let Some(reason) = source_action_blocker(record) {
             return InventoryActionCapabilities::blocked(reason, Some(source_revision));
         }
-        if record.item_type == super::models::InventoryItemType::Skill && !cfg!(target_os = "macos")
+        if matches!(
+            record.item_type,
+            super::models::InventoryItemType::Skill | super::models::InventoryItemType::Mcp
+        ) && !cfg!(target_os = "macos")
         {
             return InventoryActionCapabilities::blocked(
                 ActionBlockedReason::UnsupportedByClient,
@@ -197,19 +213,40 @@ impl ClientAdapter for CodexAdapter {
     }
 }
 
-fn codex_skill_config_path_is_editable(config_path: &Path) -> bool {
+fn codex_config_path_is_editable(config_path: &Path, boundary: &Path) -> bool {
     #[cfg(target_os = "macos")]
     {
         use std::os::unix::fs::MetadataExt;
 
-        match std::fs::symlink_metadata(config_path) {
-            Ok(metadata) => metadata.is_file() && metadata.nlink() == 1,
-            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        let Some(shared_ancestor) = config_path
+            .ancestors()
+            .find(|ancestor| boundary.starts_with(ancestor))
+        else {
+            return false;
+        };
+        for (index, path) in config_path.ancestors().enumerate() {
+            match std::fs::symlink_metadata(path) {
+                Ok(metadata) if index == 0 && (!metadata.is_file() || metadata.nlink() != 1) => {
+                    return false;
+                }
+                Ok(metadata)
+                    if index > 0 && (!metadata.is_dir() || metadata.file_type().is_symlink()) =>
+                {
+                    return false;
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return false,
+            }
+            if path == shared_ancestor {
+                return true;
+            }
         }
+        false
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = config_path;
+        let _ = (config_path, boundary);
         true
     }
 }

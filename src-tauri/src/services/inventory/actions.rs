@@ -1,6 +1,7 @@
 use super::atomic_config::{
     restore_original, AtomicConfigWriter, ConfigSource, ConfigWriteError, ConfigWriter,
 };
+use super::codex_mcp_config::update_codex_mcp_config;
 use super::codex_skill_config::update_codex_skill_config;
 use super::models::{ClientKind, InventoryItemType, InventoryRecord};
 use super::{discover_inventory_with_codex_home, InventorySnapshot};
@@ -69,13 +70,18 @@ fn set_inventory_record_enabled_with_writer(
     let record = resolve_record(&initial, &request.record_id)?;
     validate_request(record, &request)?;
 
-    let config_path = codex_home.join("config.toml");
+    let config_path = match record.item_type {
+        InventoryItemType::Skill => codex_home.join("config.toml"),
+        InventoryItemType::Mcp => PathBuf::from(&record.source_path),
+        InventoryItemType::Hook => return Err(InventoryActionError::UnsupportedRecord),
+    };
     let source = ConfigSource::read(&config_path)?;
-    let updated = update_codex_skill_config(
-        source.contents.as_deref().unwrap_or_default(),
-        record,
-        request.enabled,
-    )?;
+    let original = source.contents.as_deref().unwrap_or_default();
+    let updated = match record.item_type {
+        InventoryItemType::Skill => update_codex_skill_config(original, record, request.enabled)?,
+        InventoryItemType::Mcp => update_codex_mcp_config(original, &request, &record.name)?,
+        InventoryItemType::Hook => return Err(InventoryActionError::UnsupportedRecord),
+    };
     let mut expected = initial.clone();
     expected.record_source_revision(&config_path, updated.as_bytes());
     let (expected_revision, expected_restriction) = expected.composite_source_revision(&[
@@ -108,6 +114,17 @@ fn set_inventory_record_enabled_with_writer(
         restore_original(&source, updated.as_bytes())?;
         return Err(InventoryActionError::VerificationFailed);
     }
+    let inverse_action_available = verified_record.is_some_and(|record| {
+        if request.enabled {
+            record.action_capabilities.disable.available
+        } else {
+            record.action_capabilities.enable.available
+        }
+    });
+    if !inverse_action_available {
+        restore_original(&source, updated.as_bytes())?;
+        return Err(InventoryActionError::VerificationFailed);
+    }
     if verified_record.and_then(|record| record.action_capabilities.source_revision.as_deref())
         != Some(expected_revision.as_str())
     {
@@ -136,7 +153,12 @@ fn validate_request(
     record: &InventoryRecord,
     request: &InventoryActionRequest,
 ) -> Result<(), InventoryActionError> {
-    if record.client != ClientKind::Codex || record.item_type != InventoryItemType::Skill {
+    if record.client != ClientKind::Codex
+        || !matches!(
+            record.item_type,
+            InventoryItemType::Skill | InventoryItemType::Mcp
+        )
+    {
         return Err(InventoryActionError::UnsupportedRecord);
     }
     if !cfg!(target_os = "macos") {
@@ -176,6 +198,11 @@ mod tests {
         skill_file: PathBuf,
     }
 
+    struct McpParentLinkMutatingWriter {
+        config_dir: PathBuf,
+        moved_dir: PathBuf,
+    }
+
     impl ConfigWriter for SkillMutatingWriter {
         fn replace(&self, source: &ConfigSource, updated: &[u8]) -> Result<(), ConfigWriteError> {
             AtomicConfigWriter.replace(source, updated)?;
@@ -185,6 +212,105 @@ mod tests {
             )
             .map_err(|_| ConfigWriteError::Io)
         }
+    }
+
+    impl ConfigWriter for McpParentLinkMutatingWriter {
+        fn replace(&self, source: &ConfigSource, updated: &[u8]) -> Result<(), ConfigWriteError> {
+            use std::os::unix::fs::symlink;
+
+            AtomicConfigWriter.replace(source, updated)?;
+            fs::rename(&self.config_dir, &self.moved_dir).map_err(|_| ConfigWriteError::Io)?;
+            symlink(&self.moved_dir, &self.config_dir).map_err(|_| ConfigWriteError::Io)
+        }
+    }
+
+    #[test]
+    fn mcp_write_failure_keeps_the_original_config() {
+        let fixture = TempDir::new().unwrap();
+        let home = fixture.path().join("home");
+        let codex_home = home.join(".codex");
+        let config_path = codex_home.join("config.toml");
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(
+            &config_path,
+            "[mcp_servers.rollback]\ncommand = 'TOP_SECRET_COMMAND'\nenabled = true\n",
+        )
+        .unwrap();
+        let original = fs::read(&config_path).unwrap();
+        let snapshot =
+            discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+        let record = snapshot
+            .records
+            .iter()
+            .find(|record| {
+                record.client == ClientKind::Codex
+                    && record.item_type == InventoryItemType::Mcp
+                    && record.name == "rollback"
+            })
+            .unwrap();
+
+        let error = set_inventory_record_enabled_with_writer(
+            home,
+            codex_home.clone(),
+            Vec::new(),
+            InventoryActionRequest {
+                record_id: record.id.clone(),
+                enabled: false,
+                source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+            },
+            &FailingWriter,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, InventoryActionError::WriteFailed);
+        assert_eq!(fs::read(config_path).unwrap(), original);
+        assert!(!error.to_string().contains("TOP_SECRET_COMMAND"));
+    }
+
+    #[test]
+    fn mcp_restriction_change_during_read_back_restores_the_original_config() {
+        let fixture = TempDir::new().unwrap();
+        let home = fixture.path().join("home");
+        let codex_home = home.join(".codex");
+        let config_path = codex_home.join("config.toml");
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(
+            &config_path,
+            "[mcp_servers.rollback]\ncommand = 'TOP_SECRET_COMMAND'\nenabled = true\n",
+        )
+        .unwrap();
+        let original = fs::read(&config_path).unwrap();
+        let snapshot =
+            discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+        let record = snapshot
+            .records
+            .iter()
+            .find(|record| {
+                record.client == ClientKind::Codex
+                    && record.item_type == InventoryItemType::Mcp
+                    && record.name == "rollback"
+            })
+            .unwrap();
+
+        let error = set_inventory_record_enabled_with_writer(
+            home,
+            codex_home.clone(),
+            Vec::new(),
+            InventoryActionRequest {
+                record_id: record.id.clone(),
+                enabled: false,
+                source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+            },
+            &McpParentLinkMutatingWriter {
+                config_dir: codex_home.clone(),
+                moved_dir: fixture.path().join("moved-codex-home"),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, InventoryActionError::VerificationFailed);
+        assert_eq!(fs::read(config_path).unwrap(), original);
+        assert!(!error.to_string().contains("TOP_SECRET_COMMAND"));
     }
 
     #[test]

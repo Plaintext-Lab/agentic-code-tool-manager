@@ -148,22 +148,45 @@ fn reports_normalized_action_capabilities_for_each_client_boundary() {
             .expect("fixture record should be discovered")
     };
 
-    for name in ["claude-server", "codex-server"] {
-        let actions = &record(name).action_capabilities;
-        assert!(!actions.enable.available);
+    let claude_actions = &record("claude-server").action_capabilities;
+    assert!(!claude_actions.enable.available);
+    assert_eq!(
+        claude_actions.enable.blocked_reason,
+        Some(ActionBlockedReason::AlreadyEnabled)
+    );
+    assert!(claude_actions.disable.available);
+    assert_eq!(claude_actions.disable.blocked_reason, None);
+    assert!(claude_actions.confirmation_required);
+    assert_eq!(
+        claude_actions.reload_guidance,
+        ReloadGuidance::RestartClient
+    );
+
+    let codex_actions = &record("codex-server").action_capabilities;
+    if cfg!(target_os = "macos") {
+        assert!(!codex_actions.enable.available);
         assert_eq!(
-            actions.enable.blocked_reason,
+            codex_actions.enable.blocked_reason,
             Some(ActionBlockedReason::AlreadyEnabled)
         );
-        assert!(actions.disable.available);
-        assert_eq!(actions.disable.blocked_reason, None);
-        assert!(actions.confirmation_required);
-        assert_eq!(actions.reload_guidance, ReloadGuidance::RestartClient);
-        assert!(actions
-            .source_revision
-            .as_deref()
-            .is_some_and(|revision| revision.starts_with("sha256:")));
+        assert!(codex_actions.disable.available);
+        assert_eq!(codex_actions.disable.blocked_reason, None);
+        assert!(codex_actions.confirmation_required);
+        assert_eq!(codex_actions.reload_guidance, ReloadGuidance::RestartClient);
+    } else {
+        assert!(!codex_actions.enable.available);
+        assert!(!codex_actions.disable.available);
+        assert_eq!(
+            codex_actions.disable.blocked_reason,
+            Some(ActionBlockedReason::UnsupportedByClient)
+        );
+        assert!(!codex_actions.confirmation_required);
+        assert_eq!(codex_actions.reload_guidance, ReloadGuidance::NotRequired);
     }
+    assert!(codex_actions
+        .source_revision
+        .as_deref()
+        .is_some_and(|revision| revision.starts_with("sha256:")));
     let first_codex_revision = record("codex-server")
         .action_capabilities
         .source_revision
@@ -855,6 +878,15 @@ enabled = true
                 && record.item_type == item_type
         }));
     }
+    let plugin_mcp = snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "plugin-server")
+        .expect("plugin MCP should be discovered");
+    assert_eq!(
+        plugin_mcp.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::PluginOwnedSource)
+    );
 }
 
 #[test]
@@ -1674,6 +1706,266 @@ fn symlinked_skills_resolve_and_cycles_become_warnings() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn symlink_backed_codex_mcp_config_is_read_only() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    let config_target = fixture.path().join("managed-config.toml");
+    write(
+        &config_target,
+        "[mcp_servers.linked]\ncommand = 'linked-server'\nenabled = true\n",
+    );
+    fs::create_dir_all(&codex_home).unwrap();
+    symlink(&config_target, &config_path).unwrap();
+    let original = fs::read(&config_target).unwrap();
+
+    let snapshot = discover_inventory_with_codex_home(home, codex_home, Vec::new());
+    let record = codex_mcp(&snapshot, "linked", None);
+
+    assert!(record.is_symlink);
+    assert!(!record.action_capabilities.enable.available);
+    assert!(!record.action_capabilities.disable.available);
+    assert_eq!(
+        record.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+    assert!(fs::symlink_metadata(config_path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read(config_target).unwrap(), original);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_mcp_config_inside_a_symlinked_codex_home_is_read_only() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home_target = fixture.path().join("codex-home-target");
+    let codex_home_link = home.join(".codex");
+    let config_path = codex_home_target.join("config.toml");
+    write(
+        &config_path,
+        "[mcp_servers.linked_parent]\ncommand = 'linked-parent-server'\nenabled = true\n",
+    );
+    fs::create_dir_all(&home).unwrap();
+    symlink(&codex_home_target, &codex_home_link).unwrap();
+    let original = fs::read(&config_path).unwrap();
+
+    let snapshot = discover_inventory_with_codex_home(home, codex_home_link, Vec::new());
+    let record = codex_mcp(&snapshot, "linked_parent", None);
+
+    assert!(record.is_symlink);
+    assert!(!record.action_capabilities.enable.available);
+    assert!(!record.action_capabilities.disable.available);
+    assert_eq!(
+        record.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+    assert_eq!(fs::read(config_path).unwrap(), original);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_mcp_config_below_a_symlinked_ancestor_is_read_only() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let linked_area_target = fixture.path().join("linked-area-target");
+    let linked_area = home.join("linked-area");
+    let codex_home = linked_area.join("codex");
+    let config_path = linked_area_target.join("codex/config.toml");
+    write(
+        &config_path,
+        "[mcp_servers.linked_ancestor]\ncommand = 'linked-ancestor-server'\nenabled = true\n",
+    );
+    fs::create_dir_all(&home).unwrap();
+    symlink(&linked_area_target, &linked_area).unwrap();
+    let original = fs::read(&config_path).unwrap();
+
+    let snapshot = discover_inventory_with_codex_home(home, codex_home, Vec::new());
+    let record = codex_mcp(&snapshot, "linked_ancestor", None);
+
+    assert!(record.is_symlink);
+    assert!(!record.action_capabilities.enable.available);
+    assert!(!record.action_capabilities.disable.available);
+    assert_eq!(
+        record.action_capabilities.disable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+    assert_eq!(fs::read(config_path).unwrap(), original);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_mcp_action_rejects_a_stale_source_without_writing() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    write(
+        &config_path,
+        "[mcp_servers.stale]\ncommand = 'before-scan'\nenabled = true\n",
+    );
+    let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+    let record = codex_mcp(&initial, "stale", None);
+    write(
+        &config_path,
+        "[mcp_servers.stale]\ncommand = 'changed-after-scan'\nenabled = true\n",
+    );
+    let changed = fs::read(&config_path).unwrap();
+
+    let error = set_inventory_record_enabled_with_paths(
+        home,
+        codex_home,
+        Vec::new(),
+        InventoryActionRequest {
+            record_id: record.id.clone(),
+            enabled: false,
+            source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error, InventoryActionError::StaleInventory);
+    assert_eq!(fs::read(config_path).unwrap(), changed);
+    assert!(!error.to_string().contains("changed-after-scan"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_mcp_action_targets_one_project_source_and_enables_it() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let project = fixture.path().join("project");
+    let user_config = codex_home.join("config.toml");
+    let project_config = project.join(".codex/config.toml");
+    write(
+        &user_config,
+        &format!(
+            "[mcp_servers.shared]\ncommand = 'user-secret'\nenabled = true\n\n[projects.{:?}]\ntrust_level = 'trusted'\n",
+            project.display().to_string()
+        ),
+    );
+    write(
+        &project_config,
+        "[mcp_servers.shared]\ncommand = 'project-secret'\nenabled = false\n",
+    );
+    let original_user_config = fs::read(&user_config).unwrap();
+    let projects = vec![project.clone()];
+    let initial =
+        discover_inventory_with_codex_home(home.clone(), codex_home.clone(), projects.clone());
+    let record = codex_mcp(&initial, "shared", Some(&project));
+
+    let updated = set_inventory_record_enabled_with_paths(
+        home,
+        codex_home,
+        projects,
+        InventoryActionRequest {
+            record_id: record.id.clone(),
+            enabled: true,
+            source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        codex_mcp(&updated, "shared", Some(&project)).enabled,
+        Some(true)
+    );
+    assert_eq!(codex_mcp(&updated, "shared", None).enabled, Some(true));
+    assert_eq!(fs::read(user_config).unwrap(), original_user_config);
+    let updated_project_config = fs::read_to_string(project_config).unwrap();
+    assert!(updated_project_config.contains("command = 'project-secret'"));
+    assert!(updated_project_config.contains("enabled = true"));
+    let serialized = serde_json::to_string(&updated).unwrap();
+    assert!(!serialized.contains("user-secret"));
+    assert!(!serialized.contains("project-secret"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn malformed_codex_mcp_enabled_state_is_read_only() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    write(
+        &config_path,
+        "[mcp_servers.malformed]\ncommand = 'server'\nenabled = 'not-a-boolean'\n",
+    );
+    let original = fs::read(&config_path).unwrap();
+
+    let snapshot = discover_inventory_with_codex_home(home, codex_home, Vec::new());
+    let record = codex_mcp(&snapshot, "malformed", None);
+
+    assert_eq!(record.enabled, None);
+    assert!(!record.action_capabilities.enable.available);
+    assert!(!record.action_capabilities.disable.available);
+    assert_eq!(
+        record.action_capabilities.enable.blocked_reason,
+        Some(ActionBlockedReason::MalformedSource)
+    );
+    assert_eq!(fs::read(config_path).unwrap(), original);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn codex_mcp_action_disables_with_native_config_and_fresh_read_back() {
+    let fixture = TempDir::new().unwrap();
+    let home = fixture.path().join("home");
+    let codex_home = home.join(".codex");
+    let config_path = codex_home.join("config.toml");
+    write(
+        &config_path,
+        r#"# preserve this comment
+[mcp_servers.toggle-me]
+command = "npx"
+args = ["-y", "secret-package"]
+env = { API_KEY = "TOP_SECRET_VALUE" }
+unknown_setting = "keep-me"
+
+[mcp_servers.untouched]
+url = "https://secret.example.test/mcp"
+enabled = true
+"#,
+    );
+    let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+    let record = codex_mcp(&initial, "toggle-me", None);
+
+    let updated = set_inventory_record_enabled_with_paths(
+        home,
+        codex_home,
+        Vec::new(),
+        InventoryActionRequest {
+            record_id: record.id.clone(),
+            enabled: false,
+            source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(codex_mcp(&updated, "toggle-me", None).enabled, Some(false));
+    assert_eq!(codex_mcp(&updated, "untouched", None).enabled, Some(true));
+    let updated_config = fs::read_to_string(config_path).unwrap();
+    assert!(updated_config.contains("# preserve this comment"));
+    assert!(updated_config.contains("TOP_SECRET_VALUE"));
+    assert!(updated_config.contains("unknown_setting = \"keep-me\""));
+    assert!(updated_config.contains("https://secret.example.test/mcp"));
+    assert!(!serde_json::to_string(&updated)
+        .unwrap()
+        .contains("TOP_SECRET_VALUE"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn codex_skill_action_disables_with_native_config_and_fresh_read_back() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");
@@ -2012,19 +2304,21 @@ fn codex_skill_action_marks_a_hard_linked_config_read_only() {
 }
 
 #[test]
-fn codex_skill_action_rejects_non_skill_records_without_exposing_config() {
+fn inventory_action_rejects_unsupported_codex_hooks_without_exposing_config() {
     let fixture = TempDir::new().unwrap();
     let home = fixture.path().join("home");
     let codex_home = home.join(".codex");
     write(
         &codex_home.join("config.toml"),
-        "secret_value = 'DO_NOT_EXPOSE'\n[mcp_servers.docs]\ncommand = 'safe'\n",
+        "secret_value = 'DO_NOT_EXPOSE'\n[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = 'command'\ncommand = 'safe'\n",
     );
     let initial = discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
     let record = initial
         .records
         .iter()
-        .find(|record| record.name == "docs")
+        .find(|record| {
+            record.client == ClientKind::Codex && record.item_type == InventoryItemType::Hook
+        })
         .unwrap();
 
     let error = set_inventory_record_enabled_with_paths(
@@ -2221,6 +2515,30 @@ fn codex_path_normalization_does_not_cross_a_symlink_parent() {
         &skills_root.join("foo"),
         &skills_root.join("alias/../foo"),
     ));
+}
+
+#[cfg(target_os = "macos")]
+fn codex_mcp<'a>(
+    snapshot: &'a InventorySnapshot,
+    name: &str,
+    project_path: Option<&Path>,
+) -> &'a InventoryRecord {
+    let project_path = project_path.map(|path| {
+        fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .display()
+            .to_string()
+    });
+    snapshot
+        .records
+        .iter()
+        .find(|record| {
+            record.client == ClientKind::Codex
+                && record.item_type == InventoryItemType::Mcp
+                && record.name == name
+                && record.project_path.as_deref() == project_path.as_deref()
+        })
+        .expect("Codex MCP fixture should be discovered")
 }
 
 #[cfg(target_os = "macos")]

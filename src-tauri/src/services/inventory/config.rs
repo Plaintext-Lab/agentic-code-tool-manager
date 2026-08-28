@@ -240,10 +240,10 @@ pub fn push_toml_mcps(
             ));
             continue;
         };
-        let enabled = server
-            .get("enabled")
-            .and_then(toml::Value::as_bool)
-            .unwrap_or(true);
+        let enabled = match server.get("enabled") {
+            Some(value) => value.as_bool(),
+            None => Some(true),
+        };
         let Some(detail) = toml_transport_detail(server) else {
             snapshot.warnings.push(InventoryWarning::blocked(
                 client,
@@ -265,11 +265,14 @@ pub fn push_toml_mcps(
             source_priority,
         );
         apply_path_metadata(&mut record, config_path);
-        record.enabled = Some(enabled);
+        record.enabled = enabled;
         record.trust_state = trust_state;
-        record.is_effective = effective_state(enabled, trust_state);
+        record.is_effective = enabled.and_then(|enabled| effective_state(enabled, trust_state));
         record.protected_fields = toml_protected_fields(server);
         record.detail = Some(detail.to_string());
+        if enabled.is_none() {
+            record.restrict_actions(ActionBlockedReason::MalformedSource);
+        }
         snapshot.records.push(record);
     }
 }
