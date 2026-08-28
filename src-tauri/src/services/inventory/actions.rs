@@ -114,6 +114,17 @@ fn set_inventory_record_enabled_with_writer(
         restore_original(&source, updated.as_bytes())?;
         return Err(InventoryActionError::VerificationFailed);
     }
+    let inverse_action_available = verified_record.is_some_and(|record| {
+        if request.enabled {
+            record.action_capabilities.disable.available
+        } else {
+            record.action_capabilities.enable.available
+        }
+    });
+    if !inverse_action_available {
+        restore_original(&source, updated.as_bytes())?;
+        return Err(InventoryActionError::VerificationFailed);
+    }
     if verified_record.and_then(|record| record.action_capabilities.source_revision.as_deref())
         != Some(expected_revision.as_str())
     {
@@ -187,6 +198,11 @@ mod tests {
         skill_file: PathBuf,
     }
 
+    struct McpParentLinkMutatingWriter {
+        config_dir: PathBuf,
+        moved_dir: PathBuf,
+    }
+
     impl ConfigWriter for SkillMutatingWriter {
         fn replace(&self, source: &ConfigSource, updated: &[u8]) -> Result<(), ConfigWriteError> {
             AtomicConfigWriter.replace(source, updated)?;
@@ -195,6 +211,16 @@ mod tests {
                 "---\nname: rollback\ndescription: Changed during write\n---\n",
             )
             .map_err(|_| ConfigWriteError::Io)
+        }
+    }
+
+    impl ConfigWriter for McpParentLinkMutatingWriter {
+        fn replace(&self, source: &ConfigSource, updated: &[u8]) -> Result<(), ConfigWriteError> {
+            use std::os::unix::fs::symlink;
+
+            AtomicConfigWriter.replace(source, updated)?;
+            fs::rename(&self.config_dir, &self.moved_dir).map_err(|_| ConfigWriteError::Io)?;
+            symlink(&self.moved_dir, &self.config_dir).map_err(|_| ConfigWriteError::Io)
         }
     }
 
@@ -225,7 +251,7 @@ mod tests {
 
         let error = set_inventory_record_enabled_with_writer(
             home,
-            codex_home,
+            codex_home.clone(),
             Vec::new(),
             InventoryActionRequest {
                 record_id: record.id.clone(),
@@ -237,6 +263,52 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error, InventoryActionError::WriteFailed);
+        assert_eq!(fs::read(config_path).unwrap(), original);
+        assert!(!error.to_string().contains("TOP_SECRET_COMMAND"));
+    }
+
+    #[test]
+    fn mcp_restriction_change_during_read_back_restores_the_original_config() {
+        let fixture = TempDir::new().unwrap();
+        let home = fixture.path().join("home");
+        let codex_home = home.join(".codex");
+        let config_path = codex_home.join("config.toml");
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(
+            &config_path,
+            "[mcp_servers.rollback]\ncommand = 'TOP_SECRET_COMMAND'\nenabled = true\n",
+        )
+        .unwrap();
+        let original = fs::read(&config_path).unwrap();
+        let snapshot =
+            discover_inventory_with_codex_home(home.clone(), codex_home.clone(), Vec::new());
+        let record = snapshot
+            .records
+            .iter()
+            .find(|record| {
+                record.client == ClientKind::Codex
+                    && record.item_type == InventoryItemType::Mcp
+                    && record.name == "rollback"
+            })
+            .unwrap();
+
+        let error = set_inventory_record_enabled_with_writer(
+            home,
+            codex_home.clone(),
+            Vec::new(),
+            InventoryActionRequest {
+                record_id: record.id.clone(),
+                enabled: false,
+                source_revision: record.action_capabilities.source_revision.clone().unwrap(),
+            },
+            &McpParentLinkMutatingWriter {
+                config_dir: codex_home.clone(),
+                moved_dir: fixture.path().join("moved-codex-home"),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, InventoryActionError::VerificationFailed);
         assert_eq!(fs::read(config_path).unwrap(), original);
         assert!(!error.to_string().contains("TOP_SECRET_COMMAND"));
     }

@@ -213,10 +213,18 @@ fn codex_config_path_is_editable(config_path: &Path) -> bool {
     {
         use std::os::unix::fs::MetadataExt;
 
-        match std::fs::symlink_metadata(config_path) {
+        let config_is_editable = match std::fs::symlink_metadata(config_path) {
             Ok(metadata) => metadata.is_file() && metadata.nlink() == 1,
             Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-        }
+        };
+        let parent_is_editable =
+            config_path
+                .parent()
+                .is_some_and(|parent| match std::fs::symlink_metadata(parent) {
+                    Ok(metadata) => metadata.is_dir() && !metadata.file_type().is_symlink(),
+                    Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+                });
+        config_is_editable && parent_is_editable
     }
     #[cfg(not(target_os = "macos"))]
     {
